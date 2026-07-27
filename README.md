@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # sense
 
 ESPIDF components
@@ -8,3 +9,7 @@ ESPIDF components
 
 
 
+=======
+# wsense
+ESP32C6 WSense
+>>>>>>> dcd23bff2e7ac4817b45a81c1f16ec017a517c66
