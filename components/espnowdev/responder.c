@@ -259,7 +259,7 @@ static esp_err_t espnow_init(void) {
     memcpy(send_param->dest_mac, s_broadcast_mac, ESP_NOW_ETH_ALEN);
     espnow_data_prepare(send_param);
 
-    xTaskCreate(espnow_task, "espnow_task", 2048, send_param, 4, NULL);
+    //xTaskCreate(espnow_task, "espnow_task", 2048, send_param, 4, NULL);
 
     return ESP_OK;
 }
@@ -278,25 +278,25 @@ static void espnow_task(void *pvParameter)
 
     /* Start sending broadcast ESPNOW data. */
     espnow_send_param_t *send_param = (espnow_send_param_t *)pvParameter;
-    /*if (esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len) != ESP_OK) {
+    if (esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len) != ESP_OK) {
         ESP_LOGE(TAG, "Send error");
         espnow_deinit(send_param);
         vTaskDelete(NULL);
-    }*/
+    }
 
     while (xQueueReceive(s_espnow_queue, &evt, portMAX_DELAY) == pdTRUE) {
         switch (evt.id) {
             case ESPNOW_SEND_CB:
             {
                 espnow_event_send_cb_t *send_cb = &evt.info.send_cb;
-                //is_broadcast = IS_BROADCAST_ADDR(send_cb->mac_addr);
+                is_broadcast = IS_BROADCAST_ADDR(send_cb->mac_addr);
 
                 ESP_LOGD(TAG, "Send data to "MACSTR", status1: %d", MAC2STR(send_cb->mac_addr), send_cb->status);
 
-                /*if (is_broadcast && (send_param->broadcast == false)) {
+                if (is_broadcast && (send_param->broadcast == false)) {
                     break;
                 }
-
+/*
                 if (!is_broadcast) {
                     send_param->count--;
                     if (send_param->count == 0) {

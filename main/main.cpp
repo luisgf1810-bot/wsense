@@ -31,12 +31,12 @@ void Initialize() {
     battery.Init();
 
     // Init BNO085 motion reports
-    Motion_Init();
+    //Motion_Init();
     
     // Init led
     led_strip.Init();
 
-    responder_start();
+    //responder_start();
 
 }
 
@@ -99,8 +99,22 @@ void motion_task(void *pvParameter) {
     }
 }
 
+// ESPNOW
+
+static void init_espnow_master(void)
+{
 
 
+    ESP_ERROR_CHECK( esp_netif_init());
+    ESP_ERROR_CHECK( esp_event_loop_create_default() );
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    ESP_ERROR_CHECK( esp_wifi_set_mode(MY_ESPNOW_WIFI_MODE) );
+    ESP_ERROR_CHECK( esp_wifi_start() );
+    ESP_ERROR_CHECK( esp_now_init() );
+    ESP_ERROR_CHECK( esp_now_register_recv_cb(recv_cb) );
+    ESP_ERROR_CHECK( esp_now_set_pmk((const uint8_t *)MY_ESPNOW_PMK) );
+}
 
 
 // App main
