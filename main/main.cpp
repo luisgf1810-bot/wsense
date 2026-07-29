@@ -17,6 +17,7 @@ void SetupPins() {
 }
 
 
+
 // Motion sensor functions
 void Motion_Init() {
 
@@ -75,6 +76,7 @@ void motion_task(void *pvParameter) {
         vTaskDelay(1000 / portTICK_PERIOD_MS); // Wait 1 second
     }
 }
+
 
 
 // Wifi 
@@ -164,6 +166,24 @@ static void wifi_init()
 }
 
 
+
+// ESPNOW time sync
+static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+    if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
+        espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
+        s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
+        ESP_LOGI(MAIN, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
+    }
+}
+
+// Get current synchronized time
+static int64_t get_synced_time_us(void)
+{
+    return esp_timer_get_time() + s_time_offset_us;
+}
+
+
 // Espnow
 
 int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
@@ -189,7 +209,6 @@ int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t
 
     return -1;
 }
-
 
 static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
 {
@@ -282,7 +301,7 @@ static void espnow_task(void *p)
     }
 }
 
-void espnow_deinit()
+void espnow_deinit(espnow_send_param_t *send_param)
 {
     vQueueDelete(s_espnow_queue);
     s_espnow_queue = NULL;
@@ -298,7 +317,9 @@ void espnow_init() {
         return;
     }
 
-    ESP_ERROR_CHECK( esp_now_init() );
+    espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
+    espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
+    ESP_ERROR_CHECK( espnow_init(&espnow_config) );
     ESP_ERROR_CHECK( esp_now_register_recv_cb(espnow_recv_cb) );
     ESP_ERROR_CHECK( esp_now_set_pmk((const uint8_t *)CONFIG_ESPNOW_PMK) );
 
@@ -311,36 +332,24 @@ void espnow_init() {
     };
     ESP_ERROR_CHECK( esp_now_add_peer(&master_unicast) );
 
+    xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
+
+ 
 
     espnow_time_responder_config_t time_config = {
         .max_drift_ms = CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS,
     };
-    esp_event_handler_register(ESP_EVENT_ESPNOW, ESP_EVENT_ESPNOW_TIMESYNC_SYNCED, app_timesync_event_handler, NULL);
+    esp_event_handler_register(ESP_EVENT_ESPNOW, ESP_EVENT_ANY_ID, timesync_event_handler, NULL);
     ESP_ERROR_CHECK(espnow_time_responder_start(&time_config));
-    ESP_ERROR_CHECK(espnow_time_responder_request());
-    ESP_LOGI(MAIN, "Time sync responder started, max drift: %d ms", CONFIG_APP_ESPNOW_TIMESYNC_MAX_DRIFT_MS);
+    //ESP_ERROR_CHECK(espnow_time_responder_request());
+    //ESP_LOGI(MAIN, "Time sync responder started, max drift: %d ms", CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS);
 
 
-    xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
+   
 }
 
 
-// ESPNOW time sync
-static void app_timesync_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
-{
 
-    if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
-        espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
-        s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-        ESP_LOGI(MAIN, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
-    }
-}
-
-// Get current synchronized time
-static int64_t get_synced_time_us(void)
-{
-    return esp_timer_get_time() + s_time_offset_us;
-}
 
 // Main
 void Initialize() {
@@ -348,12 +357,16 @@ void Initialize() {
     // init arduino libraries
     initArduino();
 
+
     // Setup sensors enable pins
     SetupPins();
 
     // Serial init
     Serial.begin(115200);
     delay(1500);
+
+    // WiFi init
+    wifi_init();
 
     // Battery init
     battery.Init();
@@ -363,9 +376,6 @@ void Initialize() {
     
     // Init led
     led_strip.Init();
-
-    // WiFi init
-    wifi_init();
 
     // Espnow init
     espnow_init();
