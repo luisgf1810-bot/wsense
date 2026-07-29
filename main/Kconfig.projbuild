@@ -34,6 +34,13 @@ menu "Sense Configuration"
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
 
 
+     config ESPNOW_TIMESYNC_MAX_DRIFT_MS
+        int "ESPNOW timesync max time drift"
+        default 100
+        help
+            Set the Maximum drift for ESPNOW time synchronization.
+
+
     config ESPNOW_PMK
         string "ESPNOW primary master key"
         default "pmk1234567890123"
