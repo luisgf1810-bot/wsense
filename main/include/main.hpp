@@ -34,7 +34,7 @@
 
 
 
-// WiFi
+// WiFi -  cc:ba:97:f3:34:2c 
 #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
 #define H2E_IDENTIFIER ""
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
@@ -51,8 +51,8 @@ static int s_retry_num = 0;
 
 
 // Logs
-static const char *MOTION_TAG = "motion_task";
-static const char *MAIN = "main";
+static const char *MOTION_TAG = "MOTIONTASK";
+static const char *MAIN = "MAIN";
 
 // Motion
 float _motion_data[23] = { 0.0 };
@@ -72,14 +72,44 @@ static LedStrip led_strip;
 
 
 // ESPNOW
-#define MY_RECEIVER_MAC {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
-
-#define ESPNOW_MAXDELAY 512
+#define MY_RECEIVER_MAC {0xCC, 0xBA, 0x97, 0xF3, 0x33, 0xE4}
+#define ESPNOW_MAXDELAY     512
 #define ESPNOW_WIFI_IF      WIFI_IF_STA
-
-#define ESPNOW_QUEUE_SIZE           6
-
+#define ESPNOW_QUEUE_SIZE   6
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
+
+/*
+#undef ESPNOW_INIT_CONFIG_DEFAULT
+#define ESPNOW_INIT_CONFIG_DEFAULT()             \
+    {                                            \
+        .pmk = "ESP_NOW",                        \
+        .forward_enable = 1,                     \
+        .forward_switch_channel = 0,             \
+        .sec_enable = 0,                         \
+        .reverse = 0,                            \
+        .qsize = 32,                             \
+        .send_retry_num = 10,                    \
+        .send_max_timeout = pdMS_TO_TICKS(3000), \
+        .receive_enable = {                      \
+            .ack = 1,                            \
+            .forward = 1,                        \
+            .group = 1,                          \
+            .provisoning = 0,                    \
+            .control_bind = 0,                   \
+            .control_data = 0,                   \
+            .ota_status = 0,                     \
+            .ota_data = 0,                       \
+            .debug_log = 0,                      \
+            .debug_command = 0,                  \
+            .data = 0,                           \
+            .sec_status = 0,                     \
+            .sec = 0,                            \
+            .sec_data = 0,                       \
+            .reserved = 0,                       \
+        },                                       \
+    }
+*/
+
 
 enum {
     ESPNOW_DATA_BROADCAST,
@@ -129,7 +159,7 @@ typedef struct {
     uint16_t seq_num;                     //Sequence number of ESPNOW data.
     uint16_t crc;                         //CRC16 value of ESPNOW data.
     uint32_t magic;                       //Magic number which is used to determine which device to send unicast ESPNOW data.
-    uint8_t payload[0];                   //Real payload of ESPNOW data.
+    uint8_t paylmotion_taskoad[0];                   //Real payload of ESPNOW data.
 } __attribute__((packed)) espnow_data_t;
 
 /* Parameters of sending ESPNOW data. */
@@ -149,7 +179,3 @@ typedef struct {
 // ESPNOW time sync
 static int64_t s_time_offset_us = 0;
 
-
-
-// Protofuncs
-void Motion_Init();

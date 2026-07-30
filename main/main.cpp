@@ -185,7 +185,6 @@ static int64_t get_synced_time_us(void)
 
 
 // Espnow
-
 int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
 {
     espnow_data_t *buf = (espnow_data_t *)data;
@@ -320,8 +319,15 @@ void espnow_init() {
     espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
     espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
     ESP_ERROR_CHECK( espnow_init(&espnow_config) );
-    ESP_ERROR_CHECK( esp_now_register_recv_cb(espnow_recv_cb) );
-    ESP_ERROR_CHECK( esp_now_set_pmk((const uint8_t *)CONFIG_ESPNOW_PMK) );
+
+    // timesync
+    esp_event_handler_register(ESP_EVENT_ESPNOW, ESP_EVENT_ANY_ID, timesync_event_handler, NULL);
+    espnow_time_responder_config_t time_config = {
+        .max_drift_ms = CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS,
+    };
+    ESP_ERROR_CHECK(espnow_time_responder_start(&time_config));
+    ESP_ERROR_CHECK(espnow_time_responder_request());
+    ESP_LOGI(MAIN, "Time sync responder started, max drift: %d ms", CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS);
 
 
     // Alter this if you want to specify the gateway mac, enable encyption, etc
@@ -333,17 +339,6 @@ void espnow_init() {
     ESP_ERROR_CHECK( esp_now_add_peer(&master_unicast) );
 
     xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
-
- 
-
-    espnow_time_responder_config_t time_config = {
-        .max_drift_ms = CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS,
-    };
-    esp_event_handler_register(ESP_EVENT_ESPNOW, ESP_EVENT_ANY_ID, timesync_event_handler, NULL);
-    ESP_ERROR_CHECK(espnow_time_responder_start(&time_config));
-    //ESP_ERROR_CHECK(espnow_time_responder_request());
-    //ESP_LOGI(MAIN, "Time sync responder started, max drift: %d ms", CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS);
-
 
    
 }
