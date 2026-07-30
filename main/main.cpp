@@ -338,9 +338,37 @@ void espnow_init() {
     };
     ESP_ERROR_CHECK( esp_now_add_peer(&master_unicast) );
 
-    xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
+    //xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 
    
+}
+
+// Led
+static void led_task(void *p) {
+
+    uint64_t meshUs = 0;
+    const TickType_t xDelay = 10 / portTICK_PERIOD_MS;
+
+    while (true) {
+
+        // Get mesh time and create synchronized pattern
+        meshUs = get_synced_time_us();
+        uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
+        bool ledOn = phase < 5000;
+        //ESP_LOGI(MAIN, "ledOn: %s", ledOn ? "true" : "false");
+        if (ledOn) {
+            led_strip.LED(0,7,0);
+        } else {
+            led_strip.LED(0,0,0);
+        }
+        vTaskDelay(xDelay);
+    }
+
+}
+void led_init() {
+
+    led_strip.Init();
+    xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
 }
 
 
@@ -368,12 +396,12 @@ void Initialize() {
 
     // Init BNO085 motion reports
     //Motion_Init();
-    
-    // Init led
-    led_strip.Init();
 
     // Espnow init
     espnow_init();
+
+    // Init led
+    led_init();
 
 }
 
