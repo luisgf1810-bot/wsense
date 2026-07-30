@@ -26,13 +26,22 @@
 #include "esp_sleep.h"
 #include "espnow_utils.h"
 
+#include "esp_http_client.h"
+
+
+
+// Pins
 #define LED_PIN 19U
 #define LED_ON_PIN 20U
 #define SENS_ON_PIN 18U
 #define MOTION_WAKEUP_PIN 7U
 #define LIGHT_WAKEUP_PIN 5U
 
-
+// Metrics
+#define INFLUXDB_URL "http://192.168.68.114:8086/api/v2/write"
+#define INFLUXDB_TOKEN "95efGXuXDkVVwMhMlduDn0Hd77sIyOPKa1TCQA8i0ldUfq3MlqIMEey44xQlnzoY_LsURAWyZojUJFPMIJR_Mg=="
+#define INFLUXDB_ORG "influxdb"
+#define INFLUXDB_BUCKET "bucketone"
 
 // WiFi -  cc:ba:97:f3:34:2c 
 #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
