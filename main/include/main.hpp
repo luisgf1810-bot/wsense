@@ -37,6 +37,10 @@
 #define MOTION_WAKEUP_PIN 7U
 #define LIGHT_WAKEUP_PIN 5U
 
+// Led
+#define ON_DELAY_US  (500  * 1000) // 500 ms ON
+#define OFF_DELAY_US (1500 * 1000) // 1500 ms OFF
+
 // Metrics
 #define INFLUXDB_URL "http://192.168.68.114:8086/api/v2/write"
 #define INFLUXDB_TOKEN "95efGXuXDkVVwMhMlduDn0Hd77sIyOPKa1TCQA8i0ldUfq3MlqIMEey44xQlnzoY_LsURAWyZojUJFPMIJR_Mg=="

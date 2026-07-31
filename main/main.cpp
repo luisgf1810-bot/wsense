@@ -21,7 +21,7 @@ void send_data_to_influxdb(float temperature, float humidity)
 {
     // 1. Build the complete endpoint URL with Query Parameters
     char full_url[256];
-    snprintf(full_url, sizeof(full_url), "%s?org=%s&bucket=%s&precision=s", INFLUX_URL, INFLUX_ORG, INFLUX_BUCKET);
+    snprintf(full_url, sizeof(full_url), "%s?org=%s&bucket=%s&precision=s", INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET);
 
     // 2. Format the payload using InfluxDB Line Protocol
     char payload[128];
@@ -37,13 +37,13 @@ void send_data_to_influxdb(float temperature, float humidity)
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
-        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        ESP_LOGE(MAIN, "Failed to initialize HTTP client");
         return;
     }
 
     // 4. Set Required HTTP Headers
     char auth_header[256];
-    snprintf(auth_header, sizeof(auth_header), "Token %s", INFLUX_TOKEN);
+    snprintf(auth_header, sizeof(auth_header), "Token %s", INFLUXDB_TOKEN);
     
     esp_http_client_set_header(client, "Authorization", auth_header);
     esp_http_client_set_header(client, "Content-Type", "text/plain; charset=utf-8");
@@ -57,12 +57,12 @@ void send_data_to_influxdb(float temperature, float humidity)
         int status_code = esp_http_client_get_status_code(client);
         // InfluxDB returns HTTP 204 (No Content) on a successful data write
         if (status_code == 204) {
-            ESP_LOGI(TAG, "Data sent successfully! HTTP Status: %d", status_code);
+            ESP_LOGI(MAIN, "Data sent successfully! HTTP Status: %d", status_code);
         } else {
-            ESP_LOGW(TAG, "Server rejected data. HTTP Status: %d", status_code);
+            ESP_LOGW(MAIN, "Server rejected data. HTTP Status: %d", status_code);
         }
     } else {
-        ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
+        ESP_LOGE(MAIN, "HTTP POST request failed: %s", esp_err_to_name(err));
     }
 
     // 6. Clean up resources
@@ -395,28 +395,36 @@ void espnow_init() {
    
 }
 
+
 // Led
 static void led_task(void *p) {
 
-    uint64_t meshUs = 0;
-    const TickType_t xDelay = 10 / portTICK_PERIOD_MS;
+    uint32_t led_state = 0;
+    int64_t last_toggle_time = get_synced_time_us();        // Get starting time
 
-    while (true) {
+    while (1) {
+        int64_t current_time = get_synced_time_us();        // Get current timestamp
+        int64_t required_delay = led_state ? ON_DELAY_US : OFF_DELAY_US;
 
-        // Get mesh time and create synchronized pattern
-        meshUs = get_synced_time_us();
-        uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
-        bool ledOn = phase < 5000;
-        //ESP_LOGI(MAIN, "ledOn: %s", ledOn ? "true" : "false");
-        if (ledOn) {
-            led_strip.LED(0,7,0);
-        } else {
-            led_strip.LED(0,0,0);
+        // Check if enough time has passed based on the current LED state
+        if ((current_time - last_toggle_time) >= required_delay) {
+            led_state = !led_state;                         // Toggle the state
+            if (led_state) {
+                led_strip.LED(0,7,0);
+            } else {
+                led_strip.LED(0,0,0);
+            }
+            
+            last_toggle_time = current_time;                // Update timestamp
         }
-        vTaskDelay(xDelay);
+
+        // Essential FreeRTOS yield to prevent watchdog timeouts
+        vTaskDelay(pdMS_TO_TICKS(10)); 
     }
+   
 
 }
+
 void led_init() {
 
     led_strip.Init();
