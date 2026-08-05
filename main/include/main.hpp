@@ -25,9 +25,20 @@
 #include "espnow_time.h"
 #include "esp_sleep.h"
 #include "espnow_utils.h"
-
 #include "esp_http_client.h"
 
+
+
+// Influxdb
+#define TAG "INFLUX_APP"
+#define INFLUX_URL "http://192.168.68.114:8086/api/v2/write?org=sense&bucket=bucketone&precision=s"
+#define INFLUX_TOKEN "Token ySWXVH_JfYu5swtJreSMMtBSURcQQjCCEgZghhwp-cww09PhlYdUg9FvMm7pOFJPIf_Avtjk2471XSLqBl1-5Q=="
+
+static QueueHandle_t influx_queue = NULL;
+
+typedef struct {
+    int32_t drift;
+} sensor_data_t;
 
 
 // Pins
@@ -38,14 +49,8 @@
 #define LIGHT_WAKEUP_PIN 5U
 
 // Led
-#define ON_DELAY_US  (500  * 1000) // 500 ms ON
-#define OFF_DELAY_US (1500 * 1000) // 1500 ms OFF
-
-// Metrics
-#define INFLUXDB_URL "http://192.168.68.114:8086/api/v2/write"
-#define INFLUXDB_TOKEN "95efGXuXDkVVwMhMlduDn0Hd77sIyOPKa1TCQA8i0ldUfq3MlqIMEey44xQlnzoY_LsURAWyZojUJFPMIJR_Mg=="
-#define INFLUXDB_ORG "influxdb"
-#define INFLUXDB_BUCKET "bucketone"
+#define ON_DELAY_US  (50  * 1000) // 50 ms ON
+#define OFF_DELAY_US (5000 * 1000) // 5000 ms OFF
 
 // WiFi -  cc:ba:97:f3:34:2c 
 #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
@@ -64,8 +69,11 @@ static int s_retry_num = 0;
 
 
 // Logs
-static const char *MOTION_TAG = "MOTIONTASK";
-static const char *MAIN = "MAIN";
+static const char *MOTION_TAG = "MOTION";
+static const char *WIFI_TAG = "WIFI";
+static const char *ESPNOW_TAG = "ESPNOW";
+static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
+static const char *INFLUX_TAG = "INFLUX";
 
 // Motion
 float _motion_data[23] = { 0.0 };
@@ -85,10 +93,10 @@ static LedStrip led_strip;
 
 
 // ESPNOW
-#define MY_RECEIVER_MAC {0xCC, 0xBA, 0x97, 0xF3, 0x33, 0xE4}
-#define ESPNOW_MAXDELAY     512
-#define ESPNOW_WIFI_IF      WIFI_IF_STA
-#define ESPNOW_QUEUE_SIZE   6
+#define MY_RECEIVER_MAC         {0xCC, 0xBA, 0x97, 0xF3, 0x33, 0xE4}
+#define ESPNOW_MAXDELAY         512
+#define ESPNOW_WIFI_IF          WIFI_IF_STA
+#define ESPNOW_QUEUE_SIZE       6
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
 /*
@@ -191,4 +199,4 @@ typedef struct {
 
 // ESPNOW time sync
 static int64_t s_time_offset_us = 0;
-
+static int64_t get_synced_time_us(void);
