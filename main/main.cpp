@@ -17,6 +17,7 @@ void SetupPins() {
 }
 
 
+
 // Motion sensor functions
 void Motion_Init() {
 
@@ -173,13 +174,15 @@ static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t eve
     if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
         espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
         s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-        ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
+        //ledcolorb = 7;
+        //ledcolorr = 0;
+        //ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
 
         // send to influxdb queue
-        if (evt->drift_ms < CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS) {
+        /*if (evt->drift_ms < CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS && evt->drift_ms > -CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS) {
             incoming_data.drift = evt->drift_ms;
             xQueueSend(influx_queue, &incoming_data, pdMS_TO_TICKS(10));
-        }
+        }*/
     }
 }
 
@@ -199,6 +202,7 @@ void espnow_timesync_init() {
     ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time sync responder started, max drift: %d ms", CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS);
 
 }
+
 
 
 // Espnow
@@ -351,42 +355,69 @@ void espnow_init() {
 }
 
 
+
+
 // Led
 static void led_task(void *p) {
 
-    uint32_t led_state = 0;
-    int64_t last_toggle_time = get_synced_time_us();        
+    uint64_t meshUs = 0;
+    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
+    bool flag=true;
+
+    while (true) {
+
+        // Get mesh time and create synchronized pattern
+        meshUs = get_synced_time_us();
+        uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
+        bool ledOn = phase < 5000;
+        if (ledOn) {
+            if (flag) {
+                ESP_LOGI(INFLUX_TAG, "ledOn: %" PRId64 "", get_synced_time_us());
+                led_strip.LED(7, 0, 0);
+                flag=!flag;
+            }
+            //ESP_LOGI(INFLUX_TAG, "ledOn: %s", ledOn ? "true" : "false");
+            
+        } else {
+            if (!flag) {
+                ESP_LOGI(INFLUX_TAG, "ledOff: %" PRId64 "", get_synced_time_us());
+                led_strip.LED(0,0,0);
+                flag=!flag;
+            }
+        }
+        vTaskDelay(xDelay);
+    }
+
+}
+
+
+static void led_task2(void *p) {
+    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
+    sensor_data_t incoming_data;
+    incoming_data.drift = 0;
+    incoming_data.timestamp = 0;
 
     while (1) {
-        int64_t current_time = get_synced_time_us();        // Get current timestamp
-        int64_t required_delay = led_state ? ON_DELAY_US : OFF_DELAY_US;
-
-        // Check if enough time has passed based on the current LED state
-        if ((current_time - last_toggle_time) >= required_delay) {
-            led_state = !led_state;                         // Toggle the state
-            if (led_state) {
-                led_strip.LED(0,7,0);
-                //ESP_LOGI(MAIN, "Value: %" PRId64, get_synced_time_us());
-                
-            } else {
-                led_strip.LED(0,0,0);
-            }
-            
-            last_toggle_time = current_time;                // Update timestamp
+        static int64_t lastAction = 0;
+        int64_t meshus = get_synced_time_us();
+    
+        if (meshus - lastAction >= 5000000) {
+            led_strip.LED(0, 0, 7);
+            delay(80);
+            led_strip.LED(0, 0, 0);
+            lastAction = meshus;
+            ESP_LOGI(INFLUX_TAG, "Check");
         }
-
-        // Essential FreeRTOS yield to prevent watchdog timeouts
-        vTaskDelay(pdMS_TO_TICKS(10)); 
+        vTaskDelay(xDelay);
     }
-   
-
 }
 
 void led_init() {
 
     led_strip.Init();
-    //xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
+    xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
 }
+
 
 
 // InfluxDB
@@ -397,7 +428,7 @@ void write_to_influxdb(void *pvParameters) {
     while (1) {
         if (xQueueReceive(influx_queue, &incoming_data, portMAX_DELAY) == pdPASS) {
 
-            snprintf(post_data, sizeof(post_data), "espnowdrift,host=slave1 value=%" PRId32,incoming_data.drift);
+            snprintf(post_data, sizeof(post_data), "espnow,host=slave1 drift=%" PRId32 ",timestamp=%" PRId64 "", incoming_data.drift, incoming_data.timestamp);
 
             esp_http_client_config_t config = {
                 .url = INFLUX_URL,
@@ -446,6 +477,8 @@ void influxDBInit() {
 }
 
 
+
+
 // Main
 void Initialize() {
 
@@ -459,14 +492,8 @@ void Initialize() {
     // Setup sensors enable pins
     SetupPins();
 
-    // Init led
-    led_init();
-
     // Battery init
     battery.Init();
-
-    // Init BNO085 motion reports
-    //Motion_Init();
 
     // WiFi init
     wifi_init();
@@ -479,6 +506,12 @@ void Initialize() {
 
     // Init InfluxDB
     influxDBInit();
+
+    // Init led
+    led_init();
+
+    // Init BNO085 motion reports
+    //Motion_Init();
 
 }
 

@@ -38,6 +38,7 @@ static QueueHandle_t influx_queue = NULL;
 
 typedef struct {
     int32_t drift;
+    int64_t timestamp;
 } sensor_data_t;
 
 
@@ -51,6 +52,7 @@ typedef struct {
 // Led
 #define ON_DELAY_US  (50  * 1000) // 50 ms ON
 #define OFF_DELAY_US (5000 * 1000) // 5000 ms OFF
+
 
 // WiFi -  cc:ba:97:f3:34:2c 
 #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
@@ -200,3 +202,5 @@ typedef struct {
 // ESPNOW time sync
 static int64_t s_time_offset_us = 0;
 static int64_t get_synced_time_us(void);
+//static uint ledcolorr = 7;
+//static uint ledcolorb = 0;
