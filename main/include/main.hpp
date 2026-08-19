@@ -7,7 +7,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/stream_buffer.h"
 
+#include "esp_partition.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_system.h"
@@ -26,6 +28,23 @@
 #include "esp_sleep.h"
 #include "espnow_utils.h"
 #include "esp_http_client.h"
+
+
+
+// IMU
+#define SECTOR_SIZE             4096UL
+#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)   // 16KB RAM buffer to absorb flash erase latency
+#define IMU_SAMPLING_RATE_HZ    1000                // Target 1Hz tracking
+
+// 10-byte packed structural representation of one IMU reading 
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_us; 
+    int16_t accel_x;
+    int16_t accel_y;
+    int16_t accel_z;
+} imu_sample_t;
+
+static StreamBufferHandle_t xImuStreamBuffer = NULL;
 
 
 

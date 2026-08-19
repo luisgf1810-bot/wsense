@@ -18,6 +18,10 @@ void SetupPins() {
 
 
 
+
+
+
+
 // Motion sensor functions
 void Motion_Init() {
 
@@ -77,6 +81,90 @@ void motion_task(void *pvParameter) {
     }
 }
 
+void flash_writer_task(void *pvParameters) {
+
+    //Check if the partition exists
+    const esp_partition_t *part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "imu_log");
+    if (part == NULL) {
+        ESP_LOGE(MOTION_TAG, "Partition 'imu_log' not found! Halting writer.");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Direct RAM page buffer aligned to 4 bytes for ESP32 flash peripheral requirements
+    DMA_ATTR static uint8_t page_buffer[SECTOR_SIZE]; 
+    uint32_t current_flash_offset = 0;
+
+    // Erase the entire partition before starting to write
+    ESP_LOGI(MOTION_TAG, "Flash storage target verified. Size: %ld KB. Erasing whole partition...", part->size / 1024);
+    ESP_ERROR_CHECK(esp_partition_erase_range(part, 0, part->size)); // Initial fresh wipe
+
+    while (1) {
+        // Block indefinitely until a complete 4KB page chunk populates the stream buffer
+        size_t bytes_read = xStreamBufferReceive(xImuStreamBuffer, page_buffer, SECTOR_SIZE, portMAX_DELAY);
+
+        if (bytes_read == SECTOR_SIZE) {
+
+            // Double check bounds to prevent overflow crashes
+            if (current_flash_offset + SECTOR_SIZE > part->size) {
+                ESP_LOGW(MOTION_TAG, "Partition full! Wrapping pointer to the beginning (Circular logging).");
+                current_flash_offset = 0; 
+            }
+
+            // Execute raw memory transactions
+            esp_err_t err_erase = esp_partition_erase_range(part, current_flash_offset, SECTOR_SIZE);
+            esp_err_t err_write = esp_partition_write(part, current_flash_offset, page_buffer, SECTOR_SIZE);
+
+            if (err_erase == ESP_OK && err_write == ESP_OK) {
+                ESP_LOGI(MOTION_TAG, "Successfully flushed 4KB block to flash offset: 0x%lx", current_flash_offset);
+                current_flash_offset += SECTOR_SIZE;
+            } else {
+                ESP_LOGE(MOTION_TAG, "Flash hardware transaction failure!");
+            }
+        }
+    }
+}
+
+void imu_reader_task(void *pvParameters) {
+
+    TickType_t xLastWakeTime; 
+    const TickType_t xPeriod = pdMS_TO_TICKS(1000 / IMU_SAMPLING_RATE_HZ); // Calculate the period based on the desired sampling rate
+    
+    imu_sample_t sample;
+    uint32_t counter = 0;
+
+    ESP_LOGI(MOTION_TAG, "Starting IMU sampling at %d Hz...", IMU_SAMPLING_RATE_HZ);
+
+    xLastWakeTime = xTaskGetTickCount();
+
+    while (1) {
+        
+        // Populate sample data (Replace this block with your actual SPI/I2C sensor read API)
+        sample.timestamp_us = (uint32_t)esp_timer_get_time();
+        sample.accel_x = (int16_t)(counter & 0xFFFF);
+        sample.accel_y = 123;
+        sample.accel_z = -456;
+        counter++;
+
+        // Push data to stream buffer instantly. Use xStreamBufferSendFromISR() if calling inside an ISR.
+        size_t bytes_sent = xStreamBufferSend(xImuStreamBuffer, &sample, sizeof(imu_sample_t), 0);
+        
+        if (bytes_sent < sizeof(imu_sample_t)) {
+            // RAM overflow buffer warning: The flash task cannot keep up or flash is broken
+            ESP_LOGE(MOTION_TAG, "Stream buffer overflow! Dropping IMU sample.");
+        }
+
+        // Precise timing step
+        xTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+    }
+}
+
+
+
+
+
+
 
 
 // Wifi 
@@ -122,7 +210,8 @@ static void wifi_init()
                                                         &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                                                         IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
+        
+                                                &event_handler,
                                                         NULL,
                                                         &instance_got_ip));
 
@@ -133,7 +222,8 @@ static void wifi_init()
             .password = CONFIG_ESP_WIFI_PASSWORD,
             /* Authmode threshold resets to WPA2 as default if auth mode threshold equals WIFI_AUTH_OPEN
              * and password matches WPA2 standards (password len => 8).
-             * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
+        
+     * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
              * to WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK and set the password with length and format matching to
              * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
              */
@@ -469,7 +559,6 @@ void influxDBInit() {
 
 
 
-// Main
 void Initialize() {
 
     // init arduino libraries
@@ -483,22 +572,22 @@ void Initialize() {
     SetupPins();
 
     // Battery init
-    battery.Init();
+    //battery.Init();
 
     // WiFi init
     wifi_init();
 
     // Espnow init
-    espnow_init();
+    //espnow_init();
 
     // Espnow time sync init
-    espnow_timesync_init();
+    //espnow_timesync_init();
 
     // Init InfluxDB
-    influxDBInit();
+    //influxDBInit();
 
     // Init led
-    led_init();
+    //led_init();
 
     // Init BNO085 motion reports
     //Motion_Init();
@@ -512,6 +601,13 @@ void Initialize() {
 extern "C" void app_main()
 {
 
+ // Allocate raw stream space in RAM
+    xImuStreamBuffer = xStreamBufferCreate(STREAM_BUFFER_SIZE, SECTOR_SIZE);
+    if (xImuStreamBuffer == NULL) {
+        ESP_LOGE(MOTION_TAG, "Failed to create FreeRTOS Stream Buffer!");
+        return;
+    }
+
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -522,6 +618,14 @@ extern "C" void app_main()
 
     // Init components
     Initialize();
+
+    // Pin sampling task to Core 0 with high priority (Priority 10)
+    xTaskCreate(imu_reader_task, "IMU_Reader", 3072, NULL, 10, NULL);
+
+    // Pin raw flash disk tasks to Core 0 with lower priority (Priority 3)
+    xTaskCreate(flash_writer_task, "Flash_Writer", 4096, NULL, 3, NULL);
+
+
 
     //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
 
