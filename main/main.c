@@ -1,4 +1,3 @@
-
 #include "main.h"
 
 
@@ -14,16 +13,29 @@ void SetupPins() {
 
 
 
+// Led
+void led_init() {
 
+    // 1. Define the structural configuration for the LED Strip 
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_PIN,
+        .max_leds = LED_STRIP_NUM_PIXELS,
+        .led_model = LED_MODEL_SK6812,     // SK6805 shares close timing with SK6812/WS2812
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags.invert_out = false,
+    };
 
+    // 2. Configure the underlying RMT peripheral backend hardware 
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000, // 10MHz RMT engine clock resolution
+        .flags.with_dma = false,           // Unnecessary buffer overhead for a single pixel
+    };
 
-
-// Motion sensor functions
-
-
-
-
-
+    // 3. Allocate and register the complete LED instance handle 
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
+    ESP_LOGI(LED_TAG, "RMT Driver registered.");
+}
 
 
 
@@ -127,7 +139,6 @@ static void wifi_init()
 }
 
 
-
 // ESPNOW time sync
 static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
 {
@@ -146,7 +157,7 @@ static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t eve
         }*/
     }
 }
-suma
+
 static int64_t get_synced_time_us(void)
 {
     return esp_timer_get_time() + s_time_offset_us;
@@ -282,27 +293,26 @@ static void espnow_task(void *p)
     }
 }
 
-void espnow_deinit(espnow_send_param_t *send_param)
+static void espnow_close()
 {
     vQueueDelete(s_espnow_queue);
     s_espnow_queue = NULL;
     esp_now_deinit();
 }
 
-void espnow_init() {
+static esp_err_t espnow_start() {
 
     s_espnow_queue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(espnow_event_t));
     if (s_espnow_queue == NULL) {
         ESP_LOGE(ESPNOW_TAG, "Create queue fail");
-        esp_now_deinit();
-        return;
+        espnow_close();
+        return ESP_FAIL;;
     }
 
     espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
     espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
     ESP_ERROR_CHECK( espnow_init(&espnow_config) );
 
-    // Alter this if you want to specify the gateway mac, enable encyption, etc
     const esp_now_peer_info_t master_unicast = {
         .peer_addr = MY_RECEIVER_MAC,
         .channel = CONFIG_ESPNOW_CHANNEL,
@@ -312,60 +322,35 @@ void espnow_init() {
 
     //xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 
-   
+   return ESP_OK;
 }
 
 
 
 
-// Led
-void led_init() {
 
-    // 1. Define the structural configuration for the LED Strip 
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_PIN,
-        .max_leds = LED_STRIP_NUM_PIXELS,
-        .led_model = LED_MODEL_SK6812,     // SK6805 shares close timing with SK6812/WS2812
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-        .flags.invert_out = false,
-    };
-
-    // 2. Configure the underlying RMT peripheral backend hardware 
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz RMT engine clock resolution
-        .flags.with_dma = false,           // Unnecessary buffer overhead for a single pixel
-    };
-
-    // 3. Allocate and register the complete LED instance handle 
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-    ESP_LOGI(LED_TAG, "RMT Driver registered.");
-}
 
 
 
 void Initialize() {
-// Serial init
-Serial.begin(115200);
-delay(1500);
 
-// Setup sensors enable pins
-SetupPins();
+    // Setup sensors enable pins
+    SetupPins();
 
-// Init led
-led_init();
+    // Init led
+    led_init();
 
-// Battery init
-//battery.Init();
+    // Battery init
+    //battery.Init();
 
-// WiFi init
-wifi_init();
+    // WiFi init
+    //wifi_init();
 
-// Espnow init
-//espnow_init();
+    // Espnow init
+    //espnow_start();
 
-// Espnow time sync init
-//espnow_timesync_init();
+    // Espnow time sync init
+    //espnow_timesync_init();
 
 }
 
@@ -373,21 +358,22 @@ wifi_init();
 
 
 // App main
-extern "C" void app_main()
+void app_main()
 {
 
      // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
     // Init components
     Initialize();
 
-    while (1) {
+    // Test Leds
+    /*while (1) {
         // --- Red ---
         ESP_LOGI(MAIN_TAG, "Setting LED to Red");
      
@@ -400,7 +386,7 @@ extern "C" void app_main()
         ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
         vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+    }*/
 
     //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
 
