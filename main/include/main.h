@@ -1,13 +1,14 @@
-#include <iostream>
-#include "Arduino.h"
-#include "bno085.hpp"
-#include "LedStrip.hpp"
-#include "Battery.hpp"
+#include <stdio.h>
+#include <inttypes.h>
+#include "sdkconfig.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/stream_buffer.h"
+
+#include "driver/gpio.h"
+#include "led_strip.h"
 
 #include "esp_partition.h"
 #include "esp_log.h"
@@ -27,7 +28,7 @@
 #include "espnow_time.h"
 #include "esp_sleep.h"
 #include "espnow_utils.h"
-#include "esp_http_client.h"
+
 
 
 
@@ -35,6 +36,8 @@
 #define SECTOR_SIZE             4096UL
 #define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)   // 16KB RAM buffer to absorb flash erase latency
 #define IMU_SAMPLING_RATE_HZ    1000                // Target 1Hz tracking
+#define SENS_ON_PIN 18U
+#define MOTION_WAKEUP_PIN 7U
 
 // 10-byte packed structural representation of one IMU reading 
 typedef struct __attribute__((packed)) {
@@ -48,29 +51,16 @@ static StreamBufferHandle_t xImuStreamBuffer = NULL;
 
 
 
-// Influxdb
-#define TAG "INFLUX_APP"
-#define INFLUX_URL "http://192.168.68.114:8086/api/v2/write?org=sense&bucket=bucketone&precision=s"
-#define INFLUX_TOKEN "Token ySWXVH_JfYu5swtJreSMMtBSURcQQjCCEgZghhwp-cww09PhlYdUg9FvMm7pOFJPIf_Avtjk2471XSLqBl1-5Q=="
+// LED
+#define LED_SLP_PIN   20
+#define LED_PIN   19                // Change to match your physical routing layout
+#define LED_STRIP_NUM_PIXELS 1      // Driving exactly 1 SK6805 LED
 
-static QueueHandle_t influx_queue = NULL;
+static led_strip_handle_t led_strip;
 
-typedef struct {
-    int32_t drift;
-    int64_t timestamp;
-} sensor_data_t;
+#define ON_DELAY_US  (50  * 1000)   // 50 ms ON
+#define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
 
-
-// Pins
-#define LED_PIN 19U
-#define LED_ON_PIN 20U
-#define SENS_ON_PIN 18U
-#define MOTION_WAKEUP_PIN 7U
-#define LIGHT_WAKEUP_PIN 5U
-
-// Led
-#define ON_DELAY_US  (50  * 1000) // 50 ms ON
-#define OFF_DELAY_US (5000 * 1000) // 5000 ms OFF
 
 
 // WiFi -  cc:ba:97:f3:34:2c 
@@ -94,7 +84,8 @@ static const char *MOTION_TAG = "MOTION";
 static const char *WIFI_TAG = "WIFI";
 static const char *ESPNOW_TAG = "ESPNOW";
 static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
-static const char *INFLUX_TAG = "INFLUX";
+static const char *LED_TAG = "LED";
+static const char *MAIN_TAG = "MAIN";
 
 // Motion
 float _motion_data[23] = { 0.0 };
@@ -106,10 +97,7 @@ float y = 0.0;  // Y-axis acceleration
 float z = 0.0;  // Z-axis acceleration
 static int64_t start_time, end_time  = 0;  // Start time for motion reading
 
-// Motion, battery and led sensors
-static bno085 Motion;
-static Battery battery;
-static LedStrip led_strip;
+
 
 
 

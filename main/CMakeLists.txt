@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp"
-    INCLUDE_DIRS "include" "../components/bno085/include" "../components/Battery/include" "../components/LedStrip/include" 
-    PRIV_REQUIRES nvs_flash esp_event esp_wifi esp_http_client
-    REQUIRES bno085 Battery LedStrip)
+    SRCS "main.c"
+    INCLUDE_DIRS "include" 
+    PRIV_REQUIRES nvs_flash esp_event esp_wifi spi_flash esp_driver_gpio led_strip
+    )
