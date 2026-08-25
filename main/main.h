@@ -1,4 +1,8 @@
+#pragma once
+
 #include <stdio.h>
+#include <stddef.h>
+#include <stdlib.h>
 #include <inttypes.h>
 #include "sdkconfig.h"
 
@@ -7,31 +11,32 @@
 #include "freertos/event_groups.h"
 #include "freertos/stream_buffer.h"
 
-#include "driver/gpio.h"
-#include "led_strip.h"
 
-#include "esp_partition.h"
-#include "esp_log.h"
 #include "nvs_flash.h"
-#include "esp_system.h"
+#include "driver/gpio.h"
+
 #include "esp_timer.h"
+#include "esp_log.h"
+#include "esp_partition.h"
+
 #include "esp_wifi.h"
 #include "esp_event.h"
-#include "lwip/err.h"
-#include "lwip/sys.h"
-
-
 #include "esp_mac.h"
 #include "esp_now.h"
 #include "esp_crc.h"
+#include "esp_sleep.h"
+
+#include "lwip/err.h"
+#include "lwip/sys.h"
 
 #include "espnow.h"
 #include "espnow_time.h"
-#include "esp_sleep.h"
 #include "espnow_utils.h"
 
 
-
+#include "led_strip.h"
+#include "ble_control.h"
+#include "imu_flash_log.h"
 
 // IMU
 #define SECTOR_SIZE             4096UL
@@ -147,7 +152,7 @@ enum {
     ESPNOW_DATA_UNICAST,
     ESPNOW_DATA_MAX,
 };
-
+#pragma once
 typedef struct __attribute__((packed)) {
     uint32_t random_value;
     bool button_pushed;

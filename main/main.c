@@ -372,21 +372,37 @@ void app_main()
     // Init components
     Initialize();
 
-    // Test Leds
-    /*while (1) {
-        // --- Red ---
-        ESP_LOGI(MAIN_TAG, "Setting LED to Red");
-     
-        ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 255, 0, 0));
-        ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-        vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(MAIN_TAG, "Initializing IMU flash logger...");
+    ESP_ERROR_CHECK(imu_flash_log_init());
 
-        // --- Green ---
-        ESP_LOGI(MAIN_TAG, "Setting LED to Green");
+    ESP_LOGI(MAIN_TAG, "Bringing up BLE control...");
+    ESP_ERROR_CHECK(ble_control_init());
+
+    ESP_LOGI(MAIN_TAG,
+             "Ready. Logging is OFF -- connect to \"ESP32C6-IMULOG\" over BLE "
+             "and write 0x01/0x00 to the command characteristic to start/stop.");
+
+             
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        imu_log_stats_t stats;
+        /*imu_flash_log_get_stats(&stats);
+
         ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }*/
+        ESP_LOGD(MAIN_TAG,
+                 "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32
+                 " seq=%" PRIu32 " wraps=%" PRIu32
+                 " overruns=%" PRIu32 " erase_fail=%" PRIu32 " write_fail=%" PRIu32,
+                 stats.sectors_written, stats.next_sector, stats.total_sectors,
+                 stats.next_seq, stats.wrap_count, stats.buffer_overruns,
+                 stats.sectors_erase_failed, stats.sectors_write_failed);*/
+    }
+
+
+
+
 
     //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
 
