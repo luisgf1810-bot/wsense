@@ -326,22 +326,109 @@ static esp_err_t espnow_start() {
 }
 
 
+// IMU
+
+static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
+{
+    if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
+        ESP_LOGI(MAIN_TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", esp_timer_get_time(),
+               value->data.linear_acceleration.x, value->data.linear_acceleration.y,
+               value->data.linear_acceleration.z);
+    }
+}
+
+static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
+    BaseType_t high_task_awoken = pdFALSE;
+    
+    
+    // Return true if a high-priority task was awakened to trigger a context switch
+    return high_task_awoken == pdTRUE;
+}
+
+
+void imu_init() {
+
+  
+    // IMU chip
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = GPIO_NUM_8,
+        .scl_io_num = GPIO_NUM_9,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
+
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x4A,  // AD0 = GND
+        .scl_speed_hz = 400000,
+    };
+    i2c_master_dev_handle_t i2c_dev;
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &i2c_dev));
+
+    ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  // NULL = default config
+    bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
+    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, 100000);  // 10Hz
+
+
+    // Sampling gtimer
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1 * 1000 * 1000, 
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    // Register the alarm callback function
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = imu_timer_alarm_cb,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+
+    // Set alarm period (1,000,000 ticks = 1 Hz sampling rate)
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = 1000000, 
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    // Enable and start the hardware timer
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+
+}
 
 
 
-
-
-
+// App main
 void Initialize() {
 
-    // Setup sensors enable pins
+    // Init GIOs
     SetupPins();
+    ESP_LOGI(MAIN_TAG, "GPIO pins initialized");
 
     // Init led
     led_init();
+    ESP_LOGI(MAIN_TAG, "LED initialized"); 
 
     // Battery init
     //battery.Init();
+
+    // FLASH Log init
+    ESP_ERROR_CHECK(imu_flash_log_init());
+    ESP_LOGI(MAIN_TAG, "IMU flash initialized");
+
+    // IMU init
+    imu_init();
+    ESP_LOGI(MAIN_TAG, "BNO085 and timer initialized");
+
+    // BLE control init
+    ESP_ERROR_CHECK(ble_control_init());
+    ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
     // WiFi init
     //wifi_init();
@@ -355,9 +442,6 @@ void Initialize() {
 }
 
 
-
-
-// App main
 void app_main()
 {
 
@@ -372,11 +456,7 @@ void app_main()
     // Init components
     Initialize();
 
-    ESP_LOGI(MAIN_TAG, "Initializing IMU flash logger...");
-    ESP_ERROR_CHECK(imu_flash_log_init());
-
-    ESP_LOGI(MAIN_TAG, "Bringing up BLE control...");
-    ESP_ERROR_CHECK(ble_control_init());
+   
 
     ESP_LOGI(MAIN_TAG,
              "Ready. Logging is OFF -- connect to \"ESP32C6-IMULOG\" over BLE "
@@ -387,9 +467,9 @@ void app_main()
         vTaskDelay(pdMS_TO_TICKS(5000));
 
         imu_log_stats_t stats;
-        /*imu_flash_log_get_stats(&stats);
+        imu_flash_log_get_stats(&stats);
 
-        ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
+        /*ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
         ESP_LOGD(MAIN_TAG,
                  "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32

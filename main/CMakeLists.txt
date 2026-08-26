@@ -7,6 +7,7 @@ idf_component_register(
     PRIV_REQUIRES   spi_flash 
                     nvs_flash
                     esp_timer
+                    esp_driver_gptimer
                     esp_event 
                     esp_wifi 
                     esp_driver_gpio 

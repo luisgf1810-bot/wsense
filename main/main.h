@@ -14,6 +14,7 @@
 
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "driver/gptimer.h"
 
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -37,11 +38,14 @@
 #include "led_strip.h"
 #include "ble_control.h"
 #include "imu_flash_log.h"
+#include "bno085.h"
 
 // IMU
 #define SECTOR_SIZE             4096UL
-#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)   // 16KB RAM buffer to absorb flash erase latency
-#define IMU_SAMPLING_RATE_HZ    1000                // Target 1Hz tracking
+// 16KB RAM buffer to absorb flash erase latency
+#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  
+ // Target 1Hz tracking
+#define IMU_SAMPLING_RATE_HZ    1000                
 #define SENS_ON_PIN 18U
 #define MOTION_WAKEUP_PIN 7U
 
@@ -54,13 +58,25 @@ typedef struct __attribute__((packed)) {
 } imu_sample_t;
 
 static StreamBufferHandle_t xImuStreamBuffer = NULL;
+static bno085_handle_t bno085;
+static gptimer_handle_t gptimer = NULL;
 
+// Motion
+float _motion_data[23] = { 0.0 };
+uint8_t _i2c_write_array[10] = { 0 };
+uint8_t _i2c_read_array[10] = { 0 };
+uint8_t _i2c_write_size = 0;
+float x = 0.0;  // X-axis acceleration
+float y = 0.0;  // Y-axis acceleration
+float z = 0.0;  // Z-axis acceleration
+static int64_t start_time, end_time  = 0;  
 
 
 // LED
+// Driving exactly 1 SK6805 LED
 #define LED_SLP_PIN   20
-#define LED_PIN   19                // Change to match your physical routing layout
-#define LED_STRIP_NUM_PIXELS 1      // Driving exactly 1 SK6805 LED
+#define LED_PIN   19                
+#define LED_STRIP_NUM_PIXELS 1      
 
 static led_strip_handle_t led_strip;
 
@@ -92,18 +108,6 @@ static const char *ESPNOW_TAG = "ESPNOW";
 static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
 static const char *LED_TAG = "LED";
 static const char *MAIN_TAG = "MAIN";
-
-// Motion
-float _motion_data[23] = { 0.0 };
-uint8_t _i2c_write_array[10] = { 0 };
-uint8_t _i2c_read_array[10] = { 0 };
-uint8_t _i2c_write_size = 0;
-float x = 0.0;  // X-axis acceleration
-float y = 0.0;  // Y-axis acceleration
-float z = 0.0;  // Z-axis acceleration
-static int64_t start_time, end_time  = 0;  // Start time for motion reading
-
-
 
 
 
@@ -152,7 +156,7 @@ enum {
     ESPNOW_DATA_UNICAST,
     ESPNOW_DATA_MAX,
 };
-#pragma once
+
 typedef struct __attribute__((packed)) {
     uint32_t random_value;
     bool button_pushed;
