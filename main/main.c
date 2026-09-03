@@ -2,9 +2,8 @@
 
 
 
-// Setup functions
+// Setup GPIOs
 void SetupPins() {
-
     // Enable the power supply to the LED Strip 
     gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(LED_SLP_PIN, 1);
@@ -16,26 +15,62 @@ void SetupPins() {
 // Led
 void led_init() {
 
-    // 1. Define the structural configuration for the LED Strip 
+     /* Enable the power supply to the LED Strip */
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
+
+    led_rcolor = 7;
+    led_gcolor = 0;
+
     led_strip_config_t strip_config = {
         .strip_gpio_num = LED_PIN,
         .max_leds = LED_STRIP_NUM_PIXELS,
-        .led_model = LED_MODEL_SK6812,     // SK6805 shares close timing with SK6812/WS2812
+        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
         .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
         .flags.invert_out = false,
     };
-
-    // 2. Configure the underlying RMT peripheral backend hardware 
     led_strip_rmt_config_t rmt_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz RMT engine clock resolution
-        .flags.with_dma = false,           // Unnecessary buffer overhead for a single pixel
+        .clk_src       = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
     };
-
-    // 3. Allocate and register the complete LED instance handle 
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-    ESP_LOGI(LED_TAG, "RMT Driver registered.");
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
+    led_strip_clear(s_led);
 }
+
+static bool IRAM_ATTR on_gptimer_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+{
+    BaseType_t hp_task_woken = pdFALSE;
+
+    uint64_t next_target = edata->alarm_value + BLINK_PERIOD_US;
+    gptimer_alarm_config_t alarm_cfg = {
+        .alarm_count = next_target,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = false,
+    };
+    /* Re-arming a manual-reload alarm from inside its own callback is the
+     * documented ESP-IDF gptimer pattern for "one-shot, re-armed each time". */
+    gptimer_set_alarm_action(timer, &alarm_cfg);
+
+    uint64_t tick = edata->alarm_value;
+    xQueueSendFromISR(s_blink_evt_q, &tick, &hp_task_woken);
+    return hp_task_woken == pdTRUE;
+}
+
+static void blink_task(void *arg)
+{
+    uint64_t tick;
+    for (;;) {
+        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "blink @ t=%llu us (reference clock)", (unsigned long long)tick);
+            led_strip_set_pixel(s_led, 0, led_rcolor, led_gcolor, 0);   /* green flash */
+            led_strip_refresh(s_led);
+            vTaskDelay(pdMS_TO_TICKS(BLINK_FLASH_MS));
+            led_strip_clear(s_led);
+        }
+    }
+}
+
 
 
 
@@ -61,63 +96,36 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
     }
 }
 
-static void wifi_init()
+static void wifi_sta_init()
 {
     s_wifi_event_group = xEventGroupCreate();
-
     ESP_ERROR_CHECK(esp_netif_init());
-
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
+                        ESP_EVENT_ANY_ID,&event_handler,NULL,&instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-        
-                                                &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
+                        IP_EVENT_STA_GOT_IP,&event_handler,NULL,&instance_got_ip));
 
-
-    wifi_config_t wifi_config = {
+    wifi_config_t sta_config = {
         .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
-            /* Authmode threshold resets to WPA2 as default if auth mode threshold equals WIFI_AUTH_OPEN
-             * and password matches WPA2 standards (password len => 8).
-        
-     * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
-             * to WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK and set the password with length and format matching to
-             * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
-             */
-            .sae_pwe_h2e = ESP_WIFI_SAE_MODE,
-            .sae_h2e_identifier = H2E_IDENTIFIER,
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    uint8_t legacy_protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G;
-    esp_err_t ret = esp_wifi_set_protocol(WIFI_IF_STA, legacy_protocol);
-    if (ret == ESP_OK) {
-        ESP_LOGI(WIFI_TAG, "Successfully limited Wi-Fi to 802.11b/g (Non-QoS focus)");
-    } else {
-        ESP_LOGE(WIFI_TAG, "Failed to set protocol bitmap. Error: %s", esp_err_to_name(ret));
-    }
-
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config) );
     ESP_ERROR_CHECK(esp_wifi_start() );
 
-    ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
+    /* Modem sleep adds tens-of-ms latency jitter to RX/TX, which is
+     * poison for timing precision - keep the radio fully awake. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
@@ -132,11 +140,184 @@ static void wifi_init()
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(WIFI_TAG, "connected to ap SSID:%s password:%s",  CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(WIFI_TAG, "Failed to connect to SSID:%s, password:%s", CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
+        ESP_LOGI(WIFI_TAG, "Failed to connect to ap SSID:%s, password:%s", CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
     } else {
         ESP_LOGE(WIFI_TAG, "UNEXPECTED EVENT");
     }
 }
+
+static void gptimer_init_from_tsf(void)
+{
+    /* Seed the GPTimer from this radio's own TSF, then let it free-run. */
+    gptimer_config_t timer_cfg = {
+        .clk_src      = GPTIMER_CLK_SRC_DEFAULT,
+        .direction    = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000,   /* 1 tick = 1 us */
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_cfg, &s_gptimer));
+
+    gptimer_event_callbacks_t cbs = { .on_alarm = on_gptimer_alarm };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer, &cbs, NULL));
+    ESP_ERROR_CHECK(gptimer_enable(s_gptimer));
+
+    int64_t tsf_now = esp_wifi_get_tsf_time(WIFI_IF_AP);
+    ESP_ERROR_CHECK(gptimer_set_raw_count(s_gptimer, (uint64_t)tsf_now));
+
+    uint64_t first_target = (((uint64_t)tsf_now / BLINK_PERIOD_US) + 1) * BLINK_PERIOD_US;
+    gptimer_alarm_config_t alarm_cfg = {
+        .alarm_count = first_target,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = false,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer, &alarm_cfg));
+    ESP_ERROR_CHECK(gptimer_start(s_gptimer));
+
+    ESP_LOGI(MAIN_TAG, "GPTimer seeded from AP TSF=%lld us", (long long)tsf_now);
+}
+
+
+/* ---------------------------------------------------------------------
+ * FTM report handling (v6.0 API: esp_wifi_ftm_get_report)
+ * ------------------------------------------------------------------- */
+/* Step-correct the running GPTimer by offset_us (+/-) and re-derive the
+ * next 3 s alarm boundary, so the hardware compare register is never
+ * left pointing at a stale target after the jump. */
+static void discipline_gptimer_step(int64_t offset_us)
+{
+    if (offset_us > FTM_MAX_STEP_US)  offset_us = FTM_MAX_STEP_US;
+    if (offset_us < -FTM_MAX_STEP_US) offset_us = -FTM_MAX_STEP_US;
+
+    portENTER_CRITICAL(&s_timer_lock);
+    uint64_t raw = 0;
+    gptimer_get_raw_count(s_gptimer, &raw);
+    int64_t corrected = (int64_t)raw + offset_us;
+    if (corrected < 0) corrected = 0;
+    gptimer_set_raw_count(s_gptimer, (uint64_t)corrected);
+
+    uint64_t next_target = (((uint64_t)corrected / BLINK_PERIOD_US) + 1) * BLINK_PERIOD_US;
+    gptimer_alarm_config_t alarm_cfg = {
+        .alarm_count = next_target,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = false,
+    };
+    gptimer_set_alarm_action(s_gptimer, &alarm_cfg);
+    portEXIT_CRITICAL(&s_timer_lock);
+}
+
+static int cmp_i64(const void *a, const void *b)
+{
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
+
+static int64_t median_i64(int64_t *arr, int n)
+{
+    qsort(arr, n, sizeof(int64_t), cmp_i64);
+    return (n % 2) ? arr[n / 2] : (arr[n / 2 - 1] + arr[n / 2]) / 2;
+}
+
+static void process_ftm_report(uint8_t num_entries)
+{
+    if (num_entries == 0) {
+        ESP_LOGW(TAG, "FTM report carried no entries");
+        return;
+    }
+    if (num_entries > FTM_MAX_ENTRIES) num_entries = FTM_MAX_ENTRIES;
+
+    wifi_ftm_report_entry_t entries[FTM_MAX_ENTRIES];
+    /* v6.0: the raw report is no longer attached to the event; fetch it
+     * explicitly into our own buffer. This also frees the driver's
+     * internal copy (attention note in esp_wifi.h). */
+    esp_err_t err = esp_wifi_ftm_get_report(entries, num_entries);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_ftm_get_report failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    int64_t offsets_ps[FTM_MAX_ENTRIES];
+    int64_t rtts_ps[FTM_MAX_ENTRIES];
+    int64_t ppms[FTM_MAX_ENTRIES];
+    int n = 0;
+
+    for (int i = 0; i < num_entries; i++) {
+        const wifi_ftm_report_entry_t *e = &entries[i];
+
+        /* T1,T4: master (responder) clock.  T2,T3: slave (initiator) clock. */
+        int64_t t1 = (int64_t)e->t1, t2 = (int64_t)e->t2;
+        int64_t t3 = (int64_t)e->t3, t4 = (int64_t)e->t4;
+
+        int64_t rtt_ps    = (t4 - t1) - (t3 - t2);              /* Espressif's own formula */
+        int64_t offset_ps = ((t1 - t2) + (t4 - t3)) / 2;         /* derived above: master - slave */
+
+        int64_t rtt_us = rtt_ps / 1000000;
+        if (rtt_us < 0 || rtt_us > FTM_MAX_PLAUSIBLE_RTT_US) {
+            continue;  /* multipath / bogus entry, discard */
+        }
+        rtts_ps[n]    = rtt_ps;
+        offsets_ps[n] = offset_ps;
+        ppms[n]       = e->ppm;
+        n++;
+    }
+
+    if (n == 0) {
+        ESP_LOGW(TAG, "All %d FTM entries rejected as outliers", num_entries);
+        return;
+    }
+
+    int64_t off_med_ps = median_i64(offsets_ps, n);
+    int64_t rtt_med_ps = median_i64(rtts_ps, n);
+    int64_t ppm_med     = median_i64(ppms, n);
+
+    int64_t offset_us = off_med_ps / 1000000;
+    int64_t rtt_us     = rtt_med_ps / 1000000;
+
+    discipline_gptimer_step(offset_us);
+    s_ppm_estimate = (int32_t)ppm_med;   /* used by the ISR for slew between syncs */
+
+    s_sync_count++;
+    ESP_LOGI(TAG, "FTM sync #%u: %d/%d valid entries, rtt=%lld us, "
+                  "phase step=%lld us, drift=%lld ppm",
+             (unsigned)s_sync_count, n, num_entries,
+             (long long)rtt_us, (long long)offset_us, (long long)ppm_med);
+}
+
+static void start_ftm_session(void)
+{
+    wifi_ftm_initiator_cfg_t ftmi_cfg = {
+        .frm_count    = FTM_FRAME_COUNT,
+        .burst_period = FTM_BURST_PERIOD,
+    };
+    memcpy(ftmi_cfg.resp_mac, s_ap_bssid, 6);
+    ftmi_cfg.channel = s_ap_channel;
+
+    esp_err_t err = esp_wifi_ftm_initiate_session(&ftmi_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_ftm_initiate_session failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void ftm_sync_task(void *arg)
+{
+    xEventGroupWaitBits(s_wifi_evt_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+
+    /* Let 802.11 TSF adoption settle for a beacon interval or two before
+     * we seed the GPTimer, so the coarse sync is already in place. */
+    vTaskDelay(pdMS_TO_TICKS(300));
+    gptimer_init_from_tsf();
+
+    while (1) {
+        start_ftm_session();
+        xEventGroupWaitBits(s_wifi_evt_group, FTM_REPORT_BIT, pdTRUE, pdTRUE, pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(FTM_SYNC_PERIOD_MS));
+    }
+}
+
+void start_fmt(){
+    xTaskCreate(ftm_sync_task, "ftm_sync_task", 4096, NULL, 5, NULL);
+}
+
+
+
 
 
 // ESPNOW time sync
@@ -345,10 +526,7 @@ static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event
     return high_task_awoken == pdTRUE;
 }
 
-
 void imu_init() {
-
-  
     // IMU chip
     i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM_0,
@@ -411,10 +589,6 @@ void Initialize() {
     SetupPins();
     ESP_LOGI(MAIN_TAG, "GPIO pins initialized");
 
-    // Init led
-    led_init();
-    ESP_LOGI(MAIN_TAG, "LED initialized"); 
-
     // Battery init
     //battery.Init();
 
@@ -430,14 +604,13 @@ void Initialize() {
     ESP_ERROR_CHECK(ble_control_init());
     ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
-    // WiFi init
-    //wifi_init();
+    // Wifi and hw timer from FTM
+    wifi_sta_init();
+    gptimer_init_from_tsf();
 
-    // Espnow init
-    //espnow_start();
-
-    // Espnow time sync init
-    //espnow_timesync_init();
+    // Init led
+    led_init();
+    ESP_LOGI(MAIN_TAG, "LED initialized"); 
 
 }
 
@@ -453,36 +626,14 @@ void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
+    s_blink_evt_q = xQueueCreate(4, sizeof(uint64_t));
+
     // Init components
     Initialize();
 
-   
-
-    ESP_LOGI(MAIN_TAG,
-             "Ready. Logging is OFF -- connect to \"ESP32C6-IMULOG\" over BLE "
-             "and write 0x01/0x00 to the command characteristic to start/stop.");
-
-             
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-
-        imu_log_stats_t stats;
-        imu_flash_log_get_stats(&stats);
-
-        /*ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
-        ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-        ESP_LOGD(MAIN_TAG,
-                 "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32
-                 " seq=%" PRIu32 " wraps=%" PRIu32
-                 " overruns=%" PRIu32 " erase_fail=%" PRIu32 " write_fail=%" PRIu32,
-                 stats.sectors_written, stats.next_sector, stats.total_sectors,
-                 stats.next_seq, stats.wrap_count, stats.buffer_overruns,
-                 stats.sectors_erase_failed, stats.sectors_write_failed);*/
-    }
-
-
-
-
+    
+    xTaskCreate(blink_task, "blink_task", 4096, NULL, 10, NULL);         
+    
 
     //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
 

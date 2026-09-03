@@ -10,7 +10,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/stream_buffer.h"
-
+#include "freertos/queue.h"
 
 #include "nvs_flash.h"
 #include "driver/gpio.h"
@@ -77,28 +77,42 @@ static int64_t start_time, end_time  = 0;
 #define LED_SLP_PIN   20
 #define LED_PIN   19                
 #define LED_STRIP_NUM_PIXELS 1      
-
-static led_strip_handle_t led_strip;
-
+#define BLINK_PERIOD_US 3000000ULL   /* 3 seconds, in GPTimer ticks (1 tick = 1 us) */
+#define BLINK_FLASH_MS  150          /* visible on-time of the flash              */
 #define ON_DELAY_US  (50  * 1000)   // 50 ms ON
 #define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
 
+static led_strip_handle_t led_strip;
+static uint led_rcolor = 0;
+static uint led_gcolor = 0;
 
-
-// WiFi -  cc:ba:97:f3:34:2c 
-#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
-#define H2E_IDENTIFIER ""
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
-
+// Wifi
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
+static bool s_ap_started;
+static gptimer_handle_t   s_gptimer      = NULL;
+static QueueHandle_t      s_blink_evt_q  = NULL;
+static led_strip_handle_t s_led          = NULL;
 
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAIL_BIT       BIT1
 #define ESPNOW_WIFI_IF      WIFI_IF_STA
+#define WIFI_SSID           "ESP32_FTM_MASTER"
+#define WIFI_PASS           "ftmsync123"
+#define WIFI_CHANNEL        6
+
+
+// FTM
+#define FTM_FRAME_COUNT             32           /* frames/burst: 0,16,24,32,64           */
+#define FTM_BURST_PERIOD            2            /* x100ms - only matters for >1 burst    */
+#define FTM_SYNC_PERIOD_MS          15000        /* re-discipline (step) every 15 s       */
+#define FTM_MAX_ENTRIES             64
+#define FTM_MAX_PLAUSIBLE_RTT_US    20000        /* reject anything absurd (20 ms)        */
+#define FTM_MAX_STEP_US             500000       /* clamp any single phase step to 500 ms */
+#define PPM_SLEW_SIGN               (-1)         /* flip to +1 if drift correction has the*/
+
+static EventGroupHandle_t s_wifi_evt_group = NULL;
+
 
 
 // Logs

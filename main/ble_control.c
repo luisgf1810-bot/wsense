@@ -4,6 +4,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+
+extern void start_fmt();
+
 /* -------------------------------------------------------------------- */
 /* Utils                                                                 */
 /* -------------------------------------------------------------------- */
@@ -21,22 +24,23 @@ static void notify_status(void);
 
 static void do_start(void)
 {
-    if (!s_logging_active) {
+    /*if (!s_logging_active) {
         if (imu_flash_log_start() == ESP_OK) {
             s_logging_active = true;
             ESP_LOGI(TAG, "logging started (BLE command)");
         }
-    }
+    }*/
+    start_fmt();
     notify_status();
 }
 
 static void do_stop(void)
 {
-    if (s_logging_active) {
+    /*if (s_logging_active) {
         imu_flash_log_stop();
         s_logging_active = false;
         ESP_LOGI(TAG, "logging stopped (BLE command)");
-    }
+    }*/
     notify_status();
 }
 
