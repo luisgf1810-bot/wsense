@@ -44,7 +44,6 @@
 #define SECTOR_SIZE             4096UL
 // 16KB RAM buffer to absorb flash erase latency
 #define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  
- // Target 1Hz tracking
 #define IMU_SAMPLING_RATE_HZ    1000                
 #define SENS_ON_PIN 18U
 #define MOTION_WAKEUP_PIN 7U
@@ -58,17 +57,17 @@ typedef struct __attribute__((packed)) {
 } imu_sample_t;
 
 static StreamBufferHandle_t xImuStreamBuffer = NULL;
-static bno085_handle_t bno085;
-static gptimer_handle_t gptimer = NULL;
+static bno085_handle_t      bno085;
+static gptimer_handle_t     s_gptimer_imu = NULL;
 
 // Motion
 float _motion_data[23] = { 0.0 };
 uint8_t _i2c_write_array[10] = { 0 };
 uint8_t _i2c_read_array[10] = { 0 };
 uint8_t _i2c_write_size = 0;
-float x = 0.0;  // X-axis acceleration
-float y = 0.0;  // Y-axis acceleration
-float z = 0.0;  // Z-axis acceleration
+float x = 0.0;  
+float y = 0.0;  
+float z = 0.0;  
 static int64_t start_time, end_time  = 0;  
 
 
@@ -85,17 +84,20 @@ static int64_t start_time, end_time  = 0;
 static led_strip_handle_t led_strip;
 static uint led_rcolor = 0;
 static uint led_gcolor = 0;
-
-// Wifi
-static EventGroupHandle_t s_wifi_event_group;
-static int s_retry_num = 0;
-static bool s_ap_started;
-static gptimer_handle_t   s_gptimer      = NULL;
+static gptimer_handle_t   s_gptimer_led      = NULL;
 static QueueHandle_t      s_blink_evt_q  = NULL;
 static led_strip_handle_t s_led          = NULL;
 
+
+// Wifi
+static EventGroupHandle_t  s_wifi_evt_group = NULL;
+static int s_retry_num = 0;
+static bool s_ap_started;
+
+
 #define WIFI_CONNECTED_BIT  BIT0
-#define WIFI_FAIL_BIT       BIT1
+#define FTM_REPORT_BIT      BIT1
+#define WIFI_FAIL_BIT       BIT2
 #define ESPNOW_WIFI_IF      WIFI_IF_STA
 #define WIFI_SSID           "ESP32_FTM_MASTER"
 #define WIFI_PASS           "ftmsync123"
@@ -111,17 +113,25 @@ static led_strip_handle_t s_led          = NULL;
 #define FTM_MAX_STEP_US             500000       /* clamp any single phase step to 500 ms */
 #define PPM_SLEW_SIGN               (-1)         /* flip to +1 if drift correction has the*/
 
-static EventGroupHandle_t s_wifi_evt_group = NULL;
+
+static portMUX_TYPE                 s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t                     s_sync_count = 0;
+static uint8_t                      s_ap_bssid[6];
+static uint8_t                      s_ap_channel;
+static EventGroupHandle_t           s_ftm_event_group = NULL;
+
+static void process_ftm_report(uint8_t num_entries);
 
 
 
 // Logs
-static const char *MOTION_TAG = "MOTION";
-static const char *WIFI_TAG = "WIFI";
-static const char *ESPNOW_TAG = "ESPNOW";
-static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
-static const char *LED_TAG = "LED";
-static const char *MAIN_TAG = "MAIN";
+static const char *MOTION_TAG           = "MOTION";
+static const char *WIFI_TAG             = "WIFI";
+static const char *FTM_TAG              = "FTM";
+static const char *ESPNOW_TAG           = "ESPNOW";
+static const char *ESPNOW_TIMESYNC_TAG  = "ESPNOW_TIMESYNC";
+static const char *LED_TAG              = "LED";
+static const char *MAIN_TAG             = "MAIN";
 
 
 
