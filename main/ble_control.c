@@ -5,7 +5,7 @@
 #include "nvs_flash.h"
 
 
-extern void start_fmt();
+extern void start_ftm();
 
 /* -------------------------------------------------------------------- */
 /* Utils                                                                 */
@@ -30,7 +30,7 @@ static void do_start(void)
             ESP_LOGI(TAG, "logging started (BLE command)");
         }
     }*/
-    start_fmt();
+    start_ftm();
     notify_status();
 }
 

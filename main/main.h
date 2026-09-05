@@ -23,16 +23,11 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_mac.h"
-#include "esp_now.h"
 #include "esp_crc.h"
 #include "esp_sleep.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
-
-#include "espnow.h"
-#include "espnow_time.h"
-#include "espnow_utils.h"
 
 
 #include "led_strip.h"
@@ -60,7 +55,6 @@ static StreamBufferHandle_t xImuStreamBuffer = NULL;
 static bno085_handle_t      bno085;
 static gptimer_handle_t     s_gptimer_imu = NULL;
 
-// Motion
 float _motion_data[23] = { 0.0 };
 uint8_t _i2c_write_array[10] = { 0 };
 uint8_t _i2c_read_array[10] = { 0 };
@@ -72,7 +66,6 @@ static int64_t start_time, end_time  = 0;
 
 
 // LED
-// Driving exactly 1 SK6805 LED
 #define LED_SLP_PIN   20
 #define LED_PIN   19                
 #define LED_STRIP_NUM_PIXELS 1      
@@ -96,36 +89,46 @@ static bool s_ap_started;
 
 
 #define WIFI_CONNECTED_BIT  BIT0
-#define FTM_REPORT_BIT      BIT1
-#define WIFI_FAIL_BIT       BIT2
-#define ESPNOW_WIFI_IF      WIFI_IF_STA
+#define WIFI_FAIL_BIT       BIT1
 #define WIFI_SSID           "ESP32_FTM_MASTER"
 #define WIFI_PASS           "ftmsync123"
 #define WIFI_CHANNEL        6
 
 
 // FTM
-#define FTM_FRAME_COUNT             32           /* frames/burst: 0,16,24,32,64           */
+#define FTM_REPORT_BIT      BIT0
+#define FTM_FAILURE_BIT     BIT1
+#define FTM_FRAME_COUNT             8           /* frames/burst: 0,16,24,32,64           */
 #define FTM_BURST_PERIOD            2            /* x100ms - only matters for >1 burst    */
+#define FTM_MAX_BURSTS              8
 #define FTM_SYNC_PERIOD_MS          15000        /* re-discipline (step) every 15 s       */
 #define FTM_MAX_ENTRIES             64
 #define FTM_MAX_PLAUSIBLE_RTT_US    20000        /* reject anything absurd (20 ms)        */
 #define FTM_MAX_STEP_US             500000       /* clamp any single phase step to 500 ms */
 #define PPM_SLEW_SIGN               (-1)         /* flip to +1 if drift correction has the*/
-
+#define DEFAULT_WAIT_TIME_MS        (10 * 1000)
+#define ETH_ALEN                    6
 
 static portMUX_TYPE                 s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t                     s_sync_count = 0;
 static uint8_t                      s_ap_bssid[6];
 static uint8_t                      s_ap_channel;
-static EventGroupHandle_t           s_ftm_event_group = NULL;
+static uint8_t                      s_ftm_report_num_entries = 0;
+static EventGroupHandle_t           s_ftm_evt_group = NULL;
+
+/* Latest measured drift rate (ppm), applied as a predictive slew between
+ * full FTM syncs. Updated only from the FTM report handler (task
+ * context); read from the alarm ISR, so kept as a plain int (single
+ * aligned word read/write is atomic enough for this non-safety-critical
+ * use - no lock needed). */
+static volatile int32_t s_ppm_estimate = 0;
 
 static void process_ftm_report(uint8_t num_entries);
 
 
 
 // Logs
-static const char *MOTION_TAG           = "MOTION";
+static const char *MOTION_TAG           = "IMU";
 static const char *WIFI_TAG             = "WIFI";
 static const char *FTM_TAG              = "FTM";
 static const char *ESPNOW_TAG           = "ESPNOW";
@@ -134,114 +137,3 @@ static const char *LED_TAG              = "LED";
 static const char *MAIN_TAG             = "MAIN";
 
 
-
-// ESPNOW
-#define MY_RECEIVER_MAC         {0xCC, 0xBA, 0x97, 0xF3, 0x33, 0xE4}
-#define ESPNOW_MAXDELAY         512
-#define ESPNOW_WIFI_IF          WIFI_IF_STA
-#define ESPNOW_QUEUE_SIZE       6
-#define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
-
-/*
-#undef ESPNOW_INIT_CONFIG_DEFAULT
-#define ESPNOW_INIT_CONFIG_DEFAULT()             \
-    {                                            \
-        .pmk = "ESP_NOW",                        \
-        .forward_enable = 1,                     \
-        .forward_switch_channel = 0,             \
-        .sec_enable = 0,                         \
-        .reverse = 0,                            \
-        .qsize = 32,                             \
-        .send_retry_num = 10,                    \
-        .send_max_timeout = pdMS_TO_TICKS(3000), \
-        .receive_enable = {                      \
-            .ack = 1,                            \
-            .forward = 1,                        \
-            .group = 1,                          \
-            .provisoning = 0,                    \
-            .control_bind = 0,                   \
-            .control_data = 0,                   \
-            .ota_status = 0,                     \
-            .ota_data = 0,                       \
-            .debug_log = 0,                      \
-            .debug_command = 0,                  \
-            .data = 0,                           \
-            .sec_status = 0,                     \
-            .sec = 0,                            \
-            .sec_data = 0,                       \
-            .reserved = 0,                       \
-        },                                       \
-    }
-*/
-
-
-enum {
-    ESPNOW_DATA_BROADCAST,
-    ESPNOW_DATA_UNICAST,
-    ESPNOW_DATA_MAX,
-};
-
-typedef struct __attribute__((packed)) {
-    uint32_t random_value;
-    bool button_pushed;
-} my_data_t;
-
-static QueueHandle_t s_espnow_queue = NULL;
-
-typedef enum {
-    ESPNOW_SEND_CB,
-    ESPNOW_RECV_CB,
-} espnow_event_id_t;
-
-typedef struct {
-    uint8_t mac_addr[ESP_NOW_ETH_ALEN];
-    esp_now_send_status_t status;
-} espnow_event_send_cb_t;
-
-typedef struct {
-    uint8_t mac_addr[ESP_NOW_ETH_ALEN];
-    uint8_t *data;
-    int data_len;
-} espnow_event_recv_cb_t;
-
-typedef union {
-    espnow_event_send_cb_t send_cb;
-    espnow_event_recv_cb_t recv_cb;
-} espnow_event_info_t;
-
-/* When ESPNOW sending or receiving callback function is called, post event to ESPNOW task. */
-typedef struct {
-    espnow_event_id_t id;
-    espnow_event_info_t info;
-} espnow_event_t;
-
-
-/* User defined field of ESPNOW data in this example. */
-typedef struct {
-    uint8_t type;                         //Broadcast or unicast ESPNOW data.
-    uint8_t state;                        //Indicate that if has received broadcast ESPNOW data or not.
-    uint16_t seq_num;                     //Sequence number of ESPNOW data.
-    uint16_t crc;                         //CRC16 value of ESPNOW data.
-    uint32_t magic;                       //Magic number which is used to determine which device to send unicast ESPNOW data.
-    uint8_t paylmotion_taskoad[0];                   //Real payload of ESPNOW data.
-} __attribute__((packed)) espnow_data_t;
-
-/* Parameters of sending ESPNOW data. */
-typedef struct {
-    bool unicast;                         //Send unicast ESPNOW data.
-    bool broadcast;                       //Send broadcast ESPNOW data.
-    uint8_t state;                        //Indicate that if has received broadcast ESPNOW data or not.
-    uint32_t magic;                       //Magic number which is used to determine which device to send unicast ESPNOW data.
-    uint16_t count;                       //Total count of unicast ESPNOW data to be sent.
-    uint16_t delay;                       //Delay between sending two ESPNOW data, unit: ms.
-    int len;                              //Length of ESPNOW data to be sent, unit: byte.
-    uint8_t *buffer;                      //Buffer pointing to ESPNOW data.
-    uint8_t dest_mac[ESP_NOW_ETH_ALEN];   //MAC address of destination device.
-} espnow_send_param_t;
-
-
-// ESPNOW time sync
-static int64_t s_time_offset_us = 0;
-static int64_t get_synced_time_us(void);
-//static uint ledcolorr = 7;
-//static uint ledcolorb = 0;
