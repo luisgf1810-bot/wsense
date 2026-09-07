@@ -1,14 +1,5 @@
 menu "Sense Configuration"
 
-    config ESP_FTM_REPORT_LOG_ENABLE
-        bool "FTM Report logging"
-        default y
-        help
-            Select this option to get a detailed report of FTM Procedure with raw values
 
-    config ESP_FTM_REPORT_SHOW_TIMEDIFF
-        depends on ESP_FTM_REPORT_LOG_ENABLE
-        bool "Show Delta tim diff"
-        default y
 
 endmenu

@@ -29,11 +29,23 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include "esp_now.h"
+#include "espnow_time.h"
+#include "espnow_utils.h"
 
 #include "led_strip.h"
 #include "ble_control.h"
 #include "imu_flash_log.h"
 #include "bno085.h"
+
+
+// Logs
+static const char *MOTION_TAG           = "IMU";
+static const char *ESPNOW_TIMESYNC_TAG  = "ESPNOW_TIMESYNC";
+static const char *LED_TAG              = "LED";
+static const char *MAIN_TAG             = "MAIN";
+
+
 
 // IMU
 #define SECTOR_SIZE             4096UL
@@ -74,66 +86,25 @@ static int64_t start_time, end_time  = 0;
 #define ON_DELAY_US  (50  * 1000)   // 50 ms ON
 #define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
 
-static led_strip_handle_t led_strip;
-static uint led_rcolor = 0;
-static uint led_gcolor = 0;
-static gptimer_handle_t   s_gptimer_led      = NULL;
-static QueueHandle_t      s_blink_evt_q  = NULL;
-static led_strip_handle_t s_led          = NULL;
 
-
-// Wifi
-static EventGroupHandle_t  s_wifi_evt_group = NULL;
-static int s_retry_num = 0;
-static bool s_ap_started;
-
-
-#define WIFI_CONNECTED_BIT  BIT0
-#define WIFI_FAIL_BIT       BIT1
-#define WIFI_SSID           "ESP32_FTM_MASTER"
-#define WIFI_PASS           "ftmsync123"
-#define WIFI_CHANNEL        6
-
-
-// FTM
-#define FTM_REPORT_BIT      BIT0
-#define FTM_FAILURE_BIT     BIT1
-#define FTM_FRAME_COUNT             8           /* frames/burst: 0,16,24,32,64           */
-#define FTM_BURST_PERIOD            2            /* x100ms - only matters for >1 burst    */
-#define FTM_MAX_BURSTS              8
-#define FTM_SYNC_PERIOD_MS          15000        /* re-discipline (step) every 15 s       */
-#define FTM_MAX_ENTRIES             64
-#define FTM_MAX_PLAUSIBLE_RTT_US    20000        /* reject anything absurd (20 ms)        */
-#define FTM_MAX_STEP_US             500000       /* clamp any single phase step to 500 ms */
-#define PPM_SLEW_SIGN               (-1)         /* flip to +1 if drift correction has the*/
-#define DEFAULT_WAIT_TIME_MS        (10 * 1000)
-#define ETH_ALEN                    6
-
-static portMUX_TYPE                 s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
-static uint32_t                     s_sync_count = 0;
-static uint8_t                      s_ap_bssid[6];
-static uint8_t                      s_ap_channel;
-static uint8_t                      s_ftm_report_num_entries = 0;
-static EventGroupHandle_t           s_ftm_evt_group = NULL;
-
-/* Latest measured drift rate (ppm), applied as a predictive slew between
- * full FTM syncs. Updated only from the FTM report handler (task
- * context); read from the alarm ISR, so kept as a plain int (single
- * aligned word read/write is atomic enough for this non-safety-critical
- * use - no lock needed). */
-static volatile int32_t s_ppm_estimate = 0;
-
-static void process_ftm_report(uint8_t num_entries);
+static gptimer_handle_t     s_gptimer_led  = NULL;
+static QueueHandle_t        s_blink_evt_q  = NULL;
+static led_strip_handle_t   s_led          = NULL;
 
 
 
-// Logs
-static const char *MOTION_TAG           = "IMU";
-static const char *WIFI_TAG             = "WIFI";
-static const char *FTM_TAG              = "FTM";
-static const char *ESPNOW_TAG           = "ESPNOW";
-static const char *ESPNOW_TIMESYNC_TAG  = "ESPNOW_TIMESYNC";
-static const char *LED_TAG              = "LED";
-static const char *MAIN_TAG             = "MAIN";
 
+// ESPNOW time sync
+#define TS_REPORT_BIT      BIT0
+#define TS_FAILURE_BIT     BIT1
+#define TS_SYNC_PERIOD_MS  1000  // 5 seconds
 
+static TaskHandle_t         timesync_task_handle = NULL;
+static EventGroupHandle_t   s_ts_evt_group = NULL;
+static int64_t              s_time_offset_us = 0;
+static int64_t              s_time_offset_ms = 0;
+
+static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t             s_sync_count = 0;
+static int64_t              s_next_alarm_target_us = 0;
+static int64_t get_synced_time_us(void);
