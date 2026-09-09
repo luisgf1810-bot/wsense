@@ -4,6 +4,104 @@
 
 
 
+// Timers
+static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+{
+    BaseType_t hp_task_woken = pdFALSE;
+
+    uint64_t tick = edata->alarm_value;
+    xQueueSendFromISR(s_blink_evt_q, &tick, &hp_task_woken);
+    return hp_task_woken == pdTRUE;
+}
+
+static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
+    BaseType_t high_task_awoken = pdFALSE;
+    
+    
+    // Return true if a high-priority task was awakened to trigger a context switch
+    return high_task_awoken == pdTRUE;
+}
+
+void discipline_hardware_timer(gptimer_handle_t timer_handle, int64_t drift_us) {
+
+    portENTER_CRITICAL(&s_timer_lock);
+    uint64_t raw;
+    gptimer_get_raw_count(timer_handle, &raw);
+    int64_t corrected = (int64_t)raw + drift_us;
+    if (corrected < 0) corrected = 0;
+    gptimer_set_raw_count(timer_handle, (uint64_t)corrected);
+
+    s_next_alarm_target_us += drift_us;   // shift the pending alarm too!
+
+    // guard against the correction jumping the counter PAST the alarm target
+    // (see gotcha below) before reprogramming
+    if (corrected >= s_next_alarm_target_us) {
+        s_next_alarm_target_us = corrected + (int64_t)BLINK_PERIOD_US;
+    }
+
+    gptimer_alarm_config_t alarm_cfg = {
+        .alarm_count = (uint64_t)s_next_alarm_target_us,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = false,
+    };
+    gptimer_set_alarm_action(s_gptimer_led, &alarm_cfg);
+    portEXIT_CRITICAL(&s_timer_lock);
+
+  
+}
+
+void init_timers() {
+
+    // create IMU timer
+    gptimer_config_t imu_timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1 * 1000 * 1000, 
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&imu_timer_config, &s_gptimer_imu));
+
+    // register callback for IMU timer
+    gptimer_event_callbacks_t imu_cbs = {
+        .on_alarm = imu_timer_alarm_cb,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_imu, &imu_cbs, NULL));
+
+    // create alarm for IMU timer
+    gptimer_alarm_config_t imu_alarm_config = {
+        .alarm_count = 1000000, 
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_imu, &imu_alarm_config));
+    ESP_ERROR_CHECK(gptimer_enable(s_gptimer_imu));
+    ESP_ERROR_CHECK(gptimer_start(s_gptimer_imu));
+
+
+    // create LED timer
+    gptimer_config_t led_timer_cfg = {
+        .clk_src      = GPTIMER_CLK_SRC_DEFAULT,
+        .direction    = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000,   /* 1 tick = 1 us */
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&led_timer_cfg, &s_gptimer_led));
+
+    // register callback for LED timer
+    gptimer_event_callbacks_t led_cbs = { 
+        .on_alarm = led_timer_alarm_cb 
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_led, &led_cbs, NULL));
+  // create alarm for LED timer
+    gptimer_alarm_config_t led_alarm_config = {
+        .alarm_count = 3000000,  /* 3 seconds */
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &led_alarm_config));
+    ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
+    ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
+
+}
+
+
+
 
 static inline int64_t get_synced_time_us(void)
 {
@@ -46,13 +144,18 @@ static void blink_task(void *arg)
             ESP_LOGI(LED_TAG, "blink @ t = %lld us (reference clock)", (long long)esp_timer_get_time());
             
         }
+
+        vTaskDelay(pdMS_TO_TICKS(TS_SYNC_PERIOD_MS));
     }
 }
 
 
 
-// IMU
 
+
+
+
+// IMU
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
 {
     if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
@@ -72,8 +175,7 @@ static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event
 
 void imu_init() {
 
-  
-    // IMU chip
+    // Create I2C bus for BNO085
     i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM_0,
         .sda_io_num = GPIO_NUM_8,
@@ -85,6 +187,7 @@ void imu_init() {
     i2c_master_bus_handle_t bus_handle;
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
 
+    // Create I2C device for BNO085
     i2c_device_config_t dev_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = 0x4A,  // AD0 = GND
@@ -93,36 +196,10 @@ void imu_init() {
     i2c_master_dev_handle_t i2c_dev;
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &i2c_dev));
 
-    ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  // NULL = default config
+    // Initialize BNO085
+    ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
     bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
     bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, 100000);  // 10Hz
-
-
-    // Sampling gtimer
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1 * 1000 * 1000, 
-    };
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
-
-    // Register the alarm callback function
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = imu_timer_alarm_cb,
-    };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
-
-    // Set alarm period (1,000,000 ticks = 1 Hz sampling rate)
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = 1000000, 
-        .flags.auto_reload_on_alarm = true,
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
-
-    // Enable and start the hardware timer
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
-
 
 }
 
