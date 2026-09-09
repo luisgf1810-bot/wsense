@@ -2,328 +2,53 @@
 
 
 
-// Setup functions
-void SetupPins() {
-
-    // Enable the power supply to the LED Strip 
-    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_SLP_PIN, 1);
-
-}
 
 
 
-// Led
-void led_init() {
-
-    // 1. Define the structural configuration for the LED Strip 
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_PIN,
-        .max_leds = LED_STRIP_NUM_PIXELS,
-        .led_model = LED_MODEL_SK6812,     // SK6805 shares close timing with SK6812/WS2812
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-        .flags.invert_out = false,
-    };
-
-    // 2. Configure the underlying RMT peripheral backend hardware 
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz RMT engine clock resolution
-        .flags.with_dma = false,           // Unnecessary buffer overhead for a single pixel
-    };
-
-    // 3. Allocate and register the complete LED instance handle 
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-    ESP_LOGI(LED_TAG, "RMT Driver registered.");
-}
-
-
-
-// Wifi 
-static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < CONFIG_ESP_MAXIMUM_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(WIFI_TAG, "retry to connect to the AP");
-        } else {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-        }
-        ESP_LOGI(WIFI_TAG,"connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(WIFI_TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-    }
-}
-
-static void wifi_init()
-{
-    s_wifi_event_group = xEventGroupCreate();
-
-    ESP_ERROR_CHECK(esp_netif_init());
-
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-        
-                                                &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
-
-
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
-            /* Authmode threshold resets to WPA2 as default if auth mode threshold equals WIFI_AUTH_OPEN
-             * and password matches WPA2 standards (password len => 8).
-        
-     * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
-             * to WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK and set the password with length and format matching to
-             * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
-             */
-            .sae_pwe_h2e = ESP_WIFI_SAE_MODE,
-            .sae_h2e_identifier = H2E_IDENTIFIER,
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    uint8_t legacy_protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G;
-    esp_err_t ret = esp_wifi_set_protocol(WIFI_IF_STA, legacy_protocol);
-    if (ret == ESP_OK) {
-        ESP_LOGI(WIFI_TAG, "Successfully limited Wi-Fi to 802.11b/g (Non-QoS focus)");
-    } else {
-        ESP_LOGE(WIFI_TAG, "Failed to set protocol bitmap. Error: %s", esp_err_to_name(ret));
-    }
-
-    ESP_ERROR_CHECK(esp_wifi_start() );
-
-    ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
-
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
-
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(WIFI_TAG, "connected to ap SSID:%s password:%s",  CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(WIFI_TAG, "Failed to connect to SSID:%s, password:%s", CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
-    } else {
-        ESP_LOGE(WIFI_TAG, "UNEXPECTED EVENT");
-    }
-}
-
-
-// ESPNOW time sync
-static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
-{
-
-    if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
-        espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
-        s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-        //ledcolorb = 7;
-        //ledcolorr = 0;
-        //ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
-
-        // send to influxdb queue
-        /*if (evt->drift_ms < CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS && evt->drift_ms > -CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS) {
-            incoming_data.drift = evt->drift_ms;
-            xQueueSend(influx_queue, &incoming_data, pdMS_TO_TICKS(10));
-        }*/
-    }
-}
-
-static int64_t get_synced_time_us(void)
+static inline int64_t get_synced_time_us(void)
 {
     return esp_timer_get_time() + s_time_offset_us;
 }
 
-void espnow_timesync_init() {
 
-    esp_event_handler_register(ESP_EVENT_ESPNOW, ESP_EVENT_ANY_ID, timesync_event_handler, NULL);
-    espnow_time_responder_config_t time_config = {
-        .max_drift_ms = CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS,
-    };
-    ESP_ERROR_CHECK(espnow_time_responder_start(&time_config));
-    ESP_ERROR_CHECK(espnow_time_responder_request());
-    ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time sync responder started, max drift: %d ms", CONFIG_ESPNOW_TIMESYNC_MAX_DRIFT_MS);
-
-}
-
-
-
-// Espnow
-int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
+/* --- LED Toggle --- */
+void blinker_led_toggle(void)
 {
-    espnow_data_t *buf = (espnow_data_t *)data;
-    uint16_t crc, crc_cal = 0;
-
-    if (data_len < sizeof(espnow_data_t)) {
-        ESP_LOGE(ESPNOW_TAG, "Receive ESPNOW data too short, len:%d", data_len);
-        return -1;
-    }
-
-    *state = buf->state;
-    *seq = buf->seq_num;
-    *magic = buf->magic;
-    crc = buf->crc;
-    buf->crc = 0;
-    crc_cal = esp_crc16_le(UINT16_MAX, (uint8_t const *)buf, data_len);
-
-    if (crc_cal == crc) {
-        return buf->type;
-    }
-
-    return -1;
-}
-
-static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
-{
-    espnow_event_t evt;
-    espnow_event_recv_cb_t *recv_cb = &evt.info.recv_cb;
-    uint8_t * mac_addr = recv_info->src_addr;
-    uint8_t * des_addr = recv_info->des_addr;
-
-    if (mac_addr == NULL || data == NULL || len <= 0) {
-        ESP_LOGE(ESPNOW_TAG, "Receive cb arg error");
+    if (!s_led) {
         return;
     }
 
-    evt.id = ESPNOW_RECV_CB;
-    memcpy(recv_cb->mac_addr, mac_addr, ESP_NOW_ETH_ALEN);
-    recv_cb->data = (uint8_t *)malloc(len);
-    if (recv_cb->data == NULL) {
-        ESP_LOGE(ESPNOW_TAG, "Malloc receive data fail");
-        return;
-    }
-    memcpy(recv_cb->data, data, len);
-    recv_cb->data_len = len;
-    if (xQueueSend(s_espnow_queue, &evt, ESPNOW_MAXDELAY) != pdTRUE) {
-        ESP_LOGW(ESPNOW_TAG, "Send receive queue fail");
-        free(recv_cb->data);
+    led_state = !led_state;
+    if (led_state) {
+        led_strip_set_pixel(s_led, 0, 0, 7, 0); /* dim green */
+        led_strip_refresh(s_led);
+    } else {
+        led_strip_clear(s_led);
     }
 }
 
-static void espnow_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
-{
-    espnow_event_t evt;
-    espnow_event_send_cb_t *send_cb = &evt.info.send_cb;
-
-    if (tx_info == NULL) {
-        ESP_LOGE(ESPNOW_TAG, "Send cb arg error");
-        return;
-    }
-
-    evt.id = ESPNOW_SEND_CB ;
-    memcpy(send_cb->mac_addr, tx_info->des_addr, ESP_NOW_ETH_ALEN);
-    send_cb->status = status;
-    if (xQueueSend(s_espnow_queue, &evt, ESPNOW_MAXDELAY) != pdTRUE) {
-        ESP_LOGW(ESPNOW_TAG, "Send send queue fail");
-    }
+/* --- GPTimer ISR Callback --- */
+static bool IRAM_ATTR gptimer_on_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
+    
+    BaseType_t hp_task_woken = pdFALSE;
+    uint64_t tick = edata->alarm_value;
+    xQueueSendFromISR(s_blink_evt_q, &tick, &hp_task_woken);
+    return hp_task_woken == pdTRUE;
 }
 
-static void espnow_task(void *p)
+/* Blink task */
+static void blink_task(void *arg)
 {
-    espnow_event_t evt;
-    int ret;
-    uint8_t recv_state = 0;
-    uint16_t recv_seq = 0;
-    uint32_t recv_magic = 0;
-
-    while (xQueueReceive(s_espnow_queue, &evt, portMAX_DELAY) == pdTRUE) {
-
-        switch (evt.id) {
-            case ESPNOW_SEND_CB:
-            {
-                espnow_event_send_cb_t *send_cb = &evt.info.send_cb;
-
-                ESP_LOGD(ESPNOW_TAG, "Send data to " MACSTR ", status1: %d", MAC2STR(send_cb->mac_addr), send_cb->status);
-
-               
-                break;
-            }
-            case ESPNOW_RECV_CB:
-            {
-                espnow_event_recv_cb_t *recv_cb = &evt.info.recv_cb;
-                ret = espnow_data_parse(recv_cb->data, recv_cb->data_len, &recv_state, &recv_seq, &recv_magic);
-                free(recv_cb->data);
-
-                if (ret == ESPNOW_DATA_BROADCAST) {
-                    ESP_LOGI(ESPNOW_TAG, " Receive %dth broadcast data from: " MACSTR "", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
-
-                }
-                else if (ret == ESPNOW_DATA_UNICAST) {
-                    ESP_LOGI(ESPNOW_TAG, " Receive %dth unicast data from: " MACSTR ", len: %d", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
-
-                }
-                else {
-                    ESP_LOGI(ESPNOW_TAG, " Receive error data from: " MACSTR "", MAC2STR(recv_cb->mac_addr));
-                }
-                break;
-            }
-            default:
-                ESP_LOGE(ESPNOW_TAG, " Callback type error: %d", evt.id);
-                break;
+    uint64_t tick;
+    for (;;) {
+        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
+            blinker_led_toggle();
+            ESP_LOGI(LED_TAG, "blink @ t = %lld us (reference clock)", (long long)esp_timer_get_time());
+            
         }
     }
 }
 
-static void espnow_close()
-{
-    vQueueDelete(s_espnow_queue);
-    s_espnow_queue = NULL;
-    esp_now_deinit();
-}
-
-static esp_err_t espnow_start() {
-
-    s_espnow_queue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(espnow_event_t));
-    if (s_espnow_queue == NULL) {
-        ESP_LOGE(ESPNOW_TAG, "Create queue fail");
-        espnow_close();
-        return ESP_FAIL;;
-    }
-
-    espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
-    espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
-    ESP_ERROR_CHECK( espnow_init(&espnow_config) );
-
-    const esp_now_peer_info_t master_unicast = {
-        .peer_addr = MY_RECEIVER_MAC,
-        .channel = CONFIG_ESPNOW_CHANNEL,
-        .ifidx = ESPNOW_WIFI_IF
-    };
-    ESP_ERROR_CHECK( esp_now_add_peer(&master_unicast) );
-
-    //xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
-
-   return ESP_OK;
-}
 
 
 // IMU
@@ -344,7 +69,6 @@ static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event
     // Return true if a high-priority task was awakened to trigger a context switch
     return high_task_awoken == pdTRUE;
 }
-
 
 void imu_init() {
 
@@ -404,48 +128,177 @@ void imu_init() {
 
 
 
-// App main
-void Initialize() {
+/* --- Initialize Hardware GPTimer --- */
+static void start_gptimer(uint64_t phase_reference_us) {
+      gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = TIMER_RESOLUTION_HZ,
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &s_gptimer_led));
 
-    // Init GIOs
-    SetupPins();
-    ESP_LOGI(MAIN_TAG, "GPIO pins initialized");
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = gptimer_on_alarm_cb,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_led, &cbs, NULL));
+    ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
 
-    // Init led
-    led_init();
-    ESP_LOGI(MAIN_TAG, "LED initialized"); 
+    /* Pre-load the raw counter with our current position inside the
+     * 3-second cycle. The alarm is fixed at BLINKER_PERIOD_US, so the
+     * very first alarm fires after exactly (BLINKER_PERIOD_US - phase)
+     * ticks - i.e. precisely on the next aligned boundary. After that,
+     * auto-reload-to-0 keeps every subsequent alarm exactly
+     * BLINKER_PERIOD_US ticks apart. */
+    uint64_t phase = phase_reference_us % BLINK_PERIOD_US;
+    ESP_ERROR_CHECK(gptimer_set_raw_count(s_gptimer_led, phase));
 
-    // Battery init
-    //battery.Init();
+    gptimer_alarm_config_t alarm_config = {
+        .reload_count = 0,
+        .alarm_count = BLINK_PERIOD_US,
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &alarm_config));
+    ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
 
-    // FLASH Log init
-    ESP_ERROR_CHECK(imu_flash_log_init());
-    ESP_LOGI(MAIN_TAG, "IMU flash initialized");
+    ESP_LOGI(MAIN_TAG, "GPTimer started, initial phase = %llu us into the 3s cycle", (unsigned long long)phase);
+}
 
-    // IMU init
-    imu_init();
-    ESP_LOGI(MAIN_TAG, "BNO085 and timer initialized");
+/* --- Discipline GPTimer --- */
+esp_err_t realign_gptimer(uint64_t phase_reference_us)
+{
 
-    // BLE control init
-    ESP_ERROR_CHECK(ble_control_init());
-    ESP_LOGI(MAIN_TAG, "BLE control initialized");
+    uint64_t target_phase = phase_reference_us % BLINK_PERIOD_US;
 
-    // WiFi init
-    //wifi_init();
+    uint64_t current_raw = 0;
+    ESP_ERROR_CHECK(gptimer_get_raw_count(s_gptimer_led, &current_raw));
+    uint64_t current_phase = current_raw % BLINK_PERIOD_US;
 
-    // Espnow init
-    //espnow_start();
+    int64_t error_us = (int64_t)target_phase - (int64_t)current_phase;
+    /* Handle wrap-around: pick the shorter path around the 3s circle. */
+    if (error_us > (int64_t)(BLINK_PERIOD_US / 2)) {
+        error_us -= (int64_t)BLINK_PERIOD_US;
+    } else if (error_us < -(int64_t)(BLINK_PERIOD_US / 2)) {
+        error_us += (int64_t)BLINK_PERIOD_US;
+    }
 
-    // Espnow time sync init
-    //espnow_timesync_init();
+    if (error_us > -(int64_t)BLINKER_MIN_CORRECTION_US && error_us <  (int64_t)BLINKER_MIN_CORRECTION_US) {
+        /* Drift is negligible - don't bother touching the register. */
+        return ESP_OK;
+    }
+
+    /* Avoid stepping the counter right on top of the alarm point: that
+     * is the one moment a raw-count write could cause a missed or
+     * double alarm. Defer to the next sync round instead - a few
+     * hundred ms of extra drift is invisible on a 3s LED blink. */
+    uint64_t distance_to_alarm = (current_phase > target_phase) ? (BLINK_PERIOD_US - current_phase) : (target_phase - current_phase);
+    if (distance_to_alarm < 5000ULL /* 5 ms guard band */) {
+        ESP_LOGW(MAIN_TAG, "skipping realign, too close to the alarm edge");
+        return ESP_OK;
+    }
+
+    ESP_ERROR_CHECK(gptimer_set_raw_count(s_gptimer_led, target_phase));
+    ESP_LOGI(MAIN_TAG, "disciplined GPTimer: phase error %lld us corrected", (long long)error_us);
+
+    return ESP_OK;
+}
+
+/* --- ESP-NOW Time-Sync Event Handler (Slave Side) --- */
+static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
+    switch (event_id) {
+        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED: {
+            espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
+            s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
+
+            ESP_LOGI(MAIN_TAG, "synced from " MACSTR ", reported drift %d ms, offset now %lld us",
+                    MAC2STR(evt->src_addr), evt->drift_ms, (long long)s_time_offset_us);
+
+            if (!s_timer_started) {
+                /* First sync ever: bring the GPTimer up, phase-aligned to
+                * the master right from the very first tick. */
+                start_gptimer((uint64_t)get_synced_time_us());
+                s_timer_started = true;
+            } else {
+                /* Steady state: discipline the free-running hardware
+                * counter to cancel whatever phase error has built up
+                * since the last correction. */
+                realign_gptimer((uint64_t)get_synced_time_us());
+            }
+            break;
+        }
+
+        case ESP_EVENT_ESPNOW_TIMESYNC_TIMEOUT:
+            ESP_LOGW(MAIN_TAG, "time sync request timed out, retrying");
+            espnow_time_responder_request();
+            break;
+
+        default:
+            break;
+    }
+}
+
+/* --- Initialize Wi-Fi & ESP-NOW Managed Sync --- */
+static void init_espnow_timesync(void) {
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    // Wi-Fi Stack Initialization
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // ESP-NOW Managed Core Initialization
+    espnow_config_t espnow_cfg = ESPNOW_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(espnow_init(&espnow_cfg));
+
+    // Responder
+    espnow_time_responder_config_t config = {
+        .max_drift_ms = 100,
+    };
+
+    ESP_LOGI(TAG, "Configuring ESP-NOW TimeSync Receiver (SLAVE)...");
+    ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ESPNOW,  ESP_EVENT_ANY_ID, &timesync_event_handler, NULL));
+    ESP_ERROR_CHECK(espnow_time_responder_start(&config));
+
+}
+
+/* --- Setup GPIOs --- */
+void SetupPins() {
+    // Enable the power supply to the LED Strip 
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
+
+}
+
+/* --- Initialize Addressable LED --- */
+static void init_led(void) {
+
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_PIN,
+        .max_leds = LED_STRIP_NUM_PIXELS,
+        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags.invert_out = false,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src       = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
+    led_strip_clear(s_led);
+
+    ESP_LOGI(LED_TAG, "LED initialized"); 
 
 }
 
 
 void app_main()
 {
-
-     // Initialize NVS
+    ESP_LOGI(MAIN_TAG, "Booting Slave Device...");
+    
+    // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -453,38 +306,18 @@ void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
-    // Init components
-    Initialize();
+    s_blink_evt_q = xQueueCreate(4, sizeof(uint64_t));
+    
+    SetupPins();
+    init_led();
+    init_espnow_timesync();
 
-   
+    xTaskCreate(blink_task, "blink_task", 4096, NULL, 5, NULL);
 
-    ESP_LOGI(MAIN_TAG,
-             "Ready. Logging is OFF -- connect to \"ESP32C6-IMULOG\" over BLE "
-             "and write 0x01/0x00 to the command characteristic to start/stop.");
+    /* Don't wait for the master's next periodic broadcast - ask for a
+     * sync immediately so the GPTimer starts as soon as possible. */
+    ESP_ERROR_CHECK(espnow_time_responder_request());
 
-             
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
+    ESP_LOGI(MAIN_TAG, "Slave ready - waiting for the first ESP-NOW time sync...");
 
-        imu_log_stats_t stats;
-        imu_flash_log_get_stats(&stats);
-
-        /*ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
-        ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-        ESP_LOGD(MAIN_TAG,
-                 "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32
-                 " seq=%" PRIu32 " wraps=%" PRIu32
-                 " overruns=%" PRIu32 " erase_fail=%" PRIu32 " write_fail=%" PRIu32,
-                 stats.sectors_written, stats.next_sector, stats.total_sectors,
-                 stats.next_seq, stats.wrap_count, stats.buffer_overruns,
-                 stats.sectors_erase_failed, stats.sectors_write_failed);*/
-    }
-
-
-
-
-
-    //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
-
-    // WARNING: if program reaches end of function app_main() the MCU will restart.
 }
