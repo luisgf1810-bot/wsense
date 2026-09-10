@@ -2,16 +2,19 @@
 
 
 
+/* --- Initialize and realign GPTimer --- */
 
-
-// Timers
-static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+static inline int64_t get_synced_time_us(void)
 {
-    BaseType_t hp_task_woken = pdFALSE;
+    return esp_timer_get_time() + s_time_offset_us;
+}
 
-    uint64_t tick = edata->alarm_value;
-    xQueueSendFromISR(s_blink_evt_q, &tick, &hp_task_woken);
-    return hp_task_woken == pdTRUE;
+static bool IRAM_ATTR gptimer_on_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
+
+    BaseType_t high_task_wakeup = pdFALSE;
+    uint8_t evt = 1;
+    xQueueSendFromISR(s_blink_evt_q, &evt, &high_task_wakeup);
+    return high_task_wakeup == pdTRUE;
 }
 
 static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
@@ -22,190 +25,6 @@ static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_a
     return high_task_awoken == pdTRUE;
 }
 
-void discipline_hardware_timer(gptimer_handle_t timer_handle, int64_t drift_us) {
-
-    portENTER_CRITICAL(&s_timer_lock);
-    uint64_t raw;
-    gptimer_get_raw_count(timer_handle, &raw);
-    int64_t corrected = (int64_t)raw + drift_us;
-    if (corrected < 0) corrected = 0;
-    gptimer_set_raw_count(timer_handle, (uint64_t)corrected);
-
-    s_next_alarm_target_us += drift_us;   // shift the pending alarm too!
-
-    // guard against the correction jumping the counter PAST the alarm target
-    // (see gotcha below) before reprogramming
-    if (corrected >= s_next_alarm_target_us) {
-        s_next_alarm_target_us = corrected + (int64_t)BLINK_PERIOD_US;
-    }
-
-    gptimer_alarm_config_t alarm_cfg = {
-        .alarm_count = (uint64_t)s_next_alarm_target_us,
-        .reload_count = 0,
-        .flags.auto_reload_on_alarm = false,
-    };
-    gptimer_set_alarm_action(s_gptimer_led, &alarm_cfg);
-    portEXIT_CRITICAL(&s_timer_lock);
-
-  
-}
-
-void init_timers() {
-
-    // create IMU timer
-    gptimer_config_t imu_timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1 * 1000 * 1000, 
-    };
-    ESP_ERROR_CHECK(gptimer_new_timer(&imu_timer_config, &s_gptimer_imu));
-
-    // register callback for IMU timer
-    gptimer_event_callbacks_t imu_cbs = {
-        .on_alarm = imu_timer_alarm_cb,
-    };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_imu, &imu_cbs, NULL));
-
-    // create alarm for IMU timer
-    gptimer_alarm_config_t imu_alarm_config = {
-        .alarm_count = 1000000, 
-        .flags.auto_reload_on_alarm = true,
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_imu, &imu_alarm_config));
-    ESP_ERROR_CHECK(gptimer_enable(s_gptimer_imu));
-    ESP_ERROR_CHECK(gptimer_start(s_gptimer_imu));
-
-
-    // create LED timer
-    gptimer_config_t led_timer_cfg = {
-        .clk_src      = GPTIMER_CLK_SRC_DEFAULT,
-        .direction    = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000,   /* 1 tick = 1 us */
-    };
-    ESP_ERROR_CHECK(gptimer_new_timer(&led_timer_cfg, &s_gptimer_led));
-
-    // register callback for LED timer
-    gptimer_event_callbacks_t led_cbs = { 
-        .on_alarm = led_timer_alarm_cb 
-    };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_led, &led_cbs, NULL));
-  // create alarm for LED timer
-    gptimer_alarm_config_t led_alarm_config = {
-        .alarm_count = 3000000,  /* 3 seconds */
-        .flags.auto_reload_on_alarm = true,
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &led_alarm_config));
-    ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
-    ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
-
-}
-
-
-
-
-static inline int64_t get_synced_time_us(void)
-{
-    return esp_timer_get_time() + s_time_offset_us;
-}
-
-
-/* --- LED Toggle --- */
-void blinker_led_toggle(void)
-{
-    if (!s_led) {
-        return;
-    }
-
-    led_state = !led_state;
-    if (led_state) {
-        led_strip_set_pixel(s_led, 0, 0, 7, 0); /* dim green */
-        led_strip_refresh(s_led);
-    } else {
-        led_strip_clear(s_led);
-    }
-}
-
-/* --- GPTimer ISR Callback --- */
-static bool IRAM_ATTR gptimer_on_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
-    
-    BaseType_t hp_task_woken = pdFALSE;
-    uint64_t tick = edata->alarm_value;
-    xQueueSendFromISR(s_blink_evt_q, &tick, &hp_task_woken);
-    return hp_task_woken == pdTRUE;
-}
-
-/* Blink task */
-static void blink_task(void *arg)
-{
-    uint64_t tick;
-    for (;;) {
-        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
-            blinker_led_toggle();
-            ESP_LOGI(LED_TAG, "blink @ t = %lld us (reference clock)", (long long)esp_timer_get_time());
-            
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(TS_SYNC_PERIOD_MS));
-    }
-}
-
-
-
-
-
-
-
-// IMU
-static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
-{
-    if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
-        ESP_LOGI(MAIN_TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", esp_timer_get_time(),
-               value->data.linear_acceleration.x, value->data.linear_acceleration.y,
-               value->data.linear_acceleration.z);
-    }
-}
-
-static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
-    BaseType_t high_task_awoken = pdFALSE;
-    
-    
-    // Return true if a high-priority task was awakened to trigger a context switch
-    return high_task_awoken == pdTRUE;
-}
-
-void imu_init() {
-
-    // Create I2C bus for BNO085
-    i2c_master_bus_config_t bus_config = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = GPIO_NUM_8,
-        .scl_io_num = GPIO_NUM_9,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    i2c_master_bus_handle_t bus_handle;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
-
-    // Create I2C device for BNO085
-    i2c_device_config_t dev_config = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = 0x4A,  // AD0 = GND
-        .scl_speed_hz = 400000,
-    };
-    i2c_master_dev_handle_t i2c_dev;
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &i2c_dev));
-
-    // Initialize BNO085
-    ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
-    bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
-    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, 100000);  // 10Hz
-
-}
-
-
-
-/* --- Initialize Hardware GPTimer --- */
 static void start_gptimer(uint64_t phase_reference_us) {
       gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
@@ -240,7 +59,6 @@ static void start_gptimer(uint64_t phase_reference_us) {
     ESP_LOGI(MAIN_TAG, "GPTimer started, initial phase = %llu us into the 3s cycle", (unsigned long long)phase);
 }
 
-/* --- Discipline GPTimer --- */
 esp_err_t realign_gptimer(uint64_t phase_reference_us)
 {
 
@@ -279,7 +97,114 @@ esp_err_t realign_gptimer(uint64_t phase_reference_us)
     return ESP_OK;
 }
 
-/* --- ESP-NOW Time-Sync Event Handler (Slave Side) --- */
+
+
+
+/* --- LED and blink task--- */
+void blinker_led_toggle(void)
+{
+    if (!s_led) {
+        return;
+    }
+
+    led_state = !led_state;
+    if (led_state) {
+        led_strip_set_pixel(s_led, 0, 0, 7, 0); /* dim green */
+        led_strip_refresh(s_led);
+    } else {
+        led_strip_clear(s_led);
+    }
+}
+
+static void blink_task(void *arg)
+{
+    uint64_t tick;
+    for (;;) {
+        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
+            blinker_led_toggle();
+            ESP_LOGI(MAIN_TAG, "blink @ t = %lld us (reference clock)", (long long)esp_timer_get_time());  
+        }
+    }
+}
+
+esp_err_t init_led(void) {
+
+    // Enable the power supply to the LED Strip 
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
+
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_PIN,
+        .max_leds = LED_STRIP_NUM_PIXELS,
+        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags.invert_out = false,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src       = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
+    led_strip_clear(s_led);
+
+    ESP_LOGI(MAIN_TAG, "LED initialized"); 
+
+    return ESP_OK;
+
+}
+
+
+
+
+/* --- Init IMU and register callbacks --- */
+static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
+{
+    if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
+        ESP_LOGI(MAIN_TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", esp_timer_get_time(),
+               value->data.linear_acceleration.x, value->data.linear_acceleration.y,
+               value->data.linear_acceleration.z);
+    }
+}
+
+esp_err_t imu_init() {
+
+    // Create I2C bus for BNO085
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = GPIO_NUM_8,
+        .scl_io_num = GPIO_NUM_9,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
+
+    // Create I2C device for BNO085
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x4A,  // AD0 = GND
+        .scl_speed_hz = 400000,
+    };
+    i2c_master_dev_handle_t i2c_dev;
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &i2c_dev));
+
+    // Initialize BNO085
+    ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
+    bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
+    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, 100000);  // 10Hz
+
+    return ESP_OK;
+
+}
+
+
+
+
+
+
+/* --- Initialize Wi-Fi & ESP-NOW Managed Sync --- */
 static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
     switch (event_id) {
         case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED: {
@@ -313,8 +238,7 @@ static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t eve
     }
 }
 
-/* --- Initialize Wi-Fi & ESP-NOW Managed Sync --- */
-static void init_espnow_timesync(void) {
+esp_err_t init_espnow_timesync(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -334,41 +258,16 @@ static void init_espnow_timesync(void) {
         .max_drift_ms = 100,
     };
 
-    ESP_LOGI(TAG, "Configuring ESP-NOW TimeSync Receiver (SLAVE)...");
     ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ESPNOW,  ESP_EVENT_ANY_ID, &timesync_event_handler, NULL));
     ESP_ERROR_CHECK(espnow_time_responder_start(&config));
+    ESP_ERROR_CHECK(espnow_time_responder_request());
 
+    ESP_LOGI(MAIN_TAG, "ESPNOW initialized"); 
+    
+    return ESP_OK;
 }
 
-/* --- Setup GPIOs --- */
-void SetupPins() {
-    // Enable the power supply to the LED Strip 
-    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_SLP_PIN, 1);
 
-}
-
-/* --- Initialize Addressable LED --- */
-static void init_led(void) {
-
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_PIN,
-        .max_leds = LED_STRIP_NUM_PIXELS,
-        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-        .flags.invert_out = false,
-    };
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src       = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000,
-        .flags.with_dma = false,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
-    led_strip_clear(s_led);
-
-    ESP_LOGI(LED_TAG, "LED initialized"); 
-
-}
 
 
 void app_main()
@@ -385,15 +284,14 @@ void app_main()
 
     s_blink_evt_q = xQueueCreate(4, sizeof(uint64_t));
     
-    SetupPins();
-    init_led();
-    init_espnow_timesync();
+    //ESP_ERROR_CHECK(battery.Init());
+    ESP_ERROR_CHECK(init_led());
+    ESP_ERROR_CHECK(init_espnow_timesync());
+    ESP_ERROR_CHECK(flashlog_init());
+    ESP_ERROR_CHECK(imu_init());
+    ESP_ERROR_CHECK(ble_control_init());
 
     xTaskCreate(blink_task, "blink_task", 4096, NULL, 5, NULL);
-
-    /* Don't wait for the master's next periodic broadcast - ask for a
-     * sync immediately so the GPTimer starts as soon as possible. */
-    ESP_ERROR_CHECK(espnow_time_responder_request());
 
     ESP_LOGI(MAIN_TAG, "Slave ready - waiting for the first ESP-NOW time sync...");
 

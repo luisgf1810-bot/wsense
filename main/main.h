@@ -40,9 +40,6 @@
 
 
 // Logs
-static const char *MOTION_TAG           = "IMU";
-static const char *ESPNOW_TIMESYNC_TAG  = "ESPNOW_TIMESYNC";
-static const char *LED_TAG              = "LED";
 static const char *MAIN_TAG             = "MAIN";
 
 
@@ -51,7 +48,7 @@ static const char *MAIN_TAG             = "MAIN";
 // 16KB RAM buffer to absorb flash erase latency
 #define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  
 #define IMU_SAMPLING_RATE_HZ    1000                
-#define SENS_ON_PIN 18U
+#define SENS_ON_PIN 18UTAG
 #define MOTION_WAKEUP_PIN 7U
 
 // 10-byte packed structural representation of one IMU reading 
@@ -104,9 +101,8 @@ static TaskHandle_t         timesync_task_handle = NULL;
 static EventGroupHandle_t   s_ts_evt_group = NULL;
 static int64_t              s_time_offset_us = 0;
 static int64_t              s_time_offset_ms = 0;
-
 static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t             s_sync_count = 0;
 static int64_t              s_next_alarm_target_us = 0;
 
-static int64_t get_synced_time_us(void);
+
