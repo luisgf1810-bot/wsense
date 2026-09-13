@@ -9,9 +9,17 @@ static inline int64_t get_synced_time_us(void)
     return esp_timer_get_time() + s_time_offset_us;
 }
 
-static bool IRAM_ATTR gptimer_on_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
+static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
 
-    BaseType_t high_task_wakeup = pdFALSE;
+ BaseType_t high_task_wakeup = pdFALSE;
+    
+    uint64_t next_alarm = edata->count_value + period; 
+    gptimer_alarm_config_t config = {
+        .alarm_count = next_alarm,
+        .flags.auto_reload_on_alarm = false,
+    };
+    gptimer_set_alarm_action(timer, &config);
+
     uint8_t evt = 1;
     xQueueSendFromISR(s_blink_evt_q, &evt, &high_task_wakeup);
     return high_task_wakeup == pdTRUE;
@@ -25,7 +33,7 @@ static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_a
     return high_task_awoken == pdTRUE;
 }
 
-static void start_gptimer(uint64_t phase_reference_us) {
+esp_err_t init_gptimer() {
       gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
         .direction = GPTIMER_COUNT_UP,
@@ -34,65 +42,19 @@ static void start_gptimer(uint64_t phase_reference_us) {
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &s_gptimer_led));
 
     gptimer_event_callbacks_t cbs = {
-        .on_alarm = gptimer_on_alarm_cb,
+        .on_alarm = led_timer_alarm_cb,
     };
     ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_led, &cbs, NULL));
     ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
 
-    /* Pre-load the raw counter with our current position inside the
-     * 3-second cycle. The alarm is fixed at BLINKER_PERIOD_US, so the
-     * very first alarm fires after exactly (BLINKER_PERIOD_US - phase)
-     * ticks - i.e. precisely on the next aligned boundary. After that,
-     * auto-reload-to-0 keeps every subsequent alarm exactly
-     * BLINKER_PERIOD_US ticks apart. */
-    uint64_t phase = phase_reference_us % BLINK_PERIOD_US;
-    ESP_ERROR_CHECK(gptimer_set_raw_count(s_gptimer_led, phase));
-
     gptimer_alarm_config_t alarm_config = {
-        .reload_count = 0,
-        .alarm_count = BLINK_PERIOD_US,
-        .flags.auto_reload_on_alarm = true,
+        .alarm_count = period,             
+        .flags.auto_reload_on_alarm = false 
     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &alarm_config));
     ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
 
-    ESP_LOGI(MAIN_TAG, "GPTimer started, initial phase = %llu us into the 3s cycle", (unsigned long long)phase);
-}
-
-esp_err_t realign_gptimer(uint64_t phase_reference_us)
-{
-
-    uint64_t target_phase = phase_reference_us % BLINK_PERIOD_US;
-
-    uint64_t current_raw = 0;
-    ESP_ERROR_CHECK(gptimer_get_raw_count(s_gptimer_led, &current_raw));
-    uint64_t current_phase = current_raw % BLINK_PERIOD_US;
-
-    int64_t error_us = (int64_t)target_phase - (int64_t)current_phase;
-    /* Handle wrap-around: pick the shorter path around the 3s circle. */
-    if (error_us > (int64_t)(BLINK_PERIOD_US / 2)) {
-        error_us -= (int64_t)BLINK_PERIOD_US;
-    } else if (error_us < -(int64_t)(BLINK_PERIOD_US / 2)) {
-        error_us += (int64_t)BLINK_PERIOD_US;
-    }
-
-    if (error_us > -(int64_t)BLINKER_MIN_CORRECTION_US && error_us <  (int64_t)BLINKER_MIN_CORRECTION_US) {
-        /* Drift is negligible - don't bother touching the register. */
-        return ESP_OK;
-    }
-
-    /* Avoid stepping the counter right on top of the alarm point: that
-     * is the one moment a raw-count write could cause a missed or
-     * double alarm. Defer to the next sync round instead - a few
-     * hundred ms of extra drift is invisible on a 3s LED blink. */
-    uint64_t distance_to_alarm = (current_phase > target_phase) ? (BLINK_PERIOD_US - current_phase) : (target_phase - current_phase);
-    if (distance_to_alarm < 5000ULL /* 5 ms guard band */) {
-        ESP_LOGW(MAIN_TAG, "skipping realign, too close to the alarm edge");
-        return ESP_OK;
-    }
-
-    ESP_ERROR_CHECK(gptimer_set_raw_count(s_gptimer_led, target_phase));
-    ESP_LOGI(MAIN_TAG, "disciplined GPTimer: phase error %lld us corrected", (long long)error_us);
+    ESP_LOGI(TAG, "GPTimer started, initial phase = %llu us", (unsigned long long)period);
 
     return ESP_OK;
 }
@@ -106,14 +68,10 @@ void blinker_led_toggle(void)
     if (!s_led) {
         return;
     }
-
-    led_state = !led_state;
-    if (led_state) {
-        led_strip_set_pixel(s_led, 0, 0, 7, 0); /* dim green */
-        led_strip_refresh(s_led);
-    } else {
-        led_strip_clear(s_led);
-    }
+    led_strip_set_pixel(s_led, 0, rcolor, gcolor, 0); 
+    led_strip_refresh(s_led);
+    vTaskDelay(ondelay);
+    led_strip_clear(s_led);
 }
 
 static void blink_task(void *arg)
@@ -122,7 +80,6 @@ static void blink_task(void *arg)
     for (;;) {
         if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
             blinker_led_toggle();
-            ESP_LOGI(MAIN_TAG, "blink @ t = %lld us (reference clock)", (long long)esp_timer_get_time());  
         }
     }
 }
@@ -130,6 +87,7 @@ static void blink_task(void *arg)
 esp_err_t init_led(void) {
 
     // Enable the power supply to the LED Strip 
+    /* When ESPNOW sending or receiving callback function is called, post event to ESPNOW task. */    
     gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(LED_SLP_PIN, 1);
 
@@ -148,7 +106,7 @@ esp_err_t init_led(void) {
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
     led_strip_clear(s_led);
 
-    ESP_LOGI(MAIN_TAG, "LED initialized"); 
+    ESP_LOGI(TAG, "LED initialized"); 
 
     return ESP_OK;
 
@@ -161,7 +119,7 @@ esp_err_t init_led(void) {
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
 {
     if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
-        ESP_LOGI(MAIN_TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", esp_timer_get_time(),
+        ESP_LOGI(TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", esp_timer_get_time(),
                value->data.linear_acceleration.x, value->data.linear_acceleration.y,
                value->data.linear_acceleration.z);
     }
@@ -207,29 +165,18 @@ esp_err_t imu_init() {
 /* --- Initialize Wi-Fi & ESP-NOW Managed Sync --- */
 static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
     switch (event_id) {
-        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED: {
+        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED: 
             espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
             s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-
-            ESP_LOGI(MAIN_TAG, "synced from " MACSTR ", reported drift %d ms, offset now %lld us",
+            //period = period + s_time_offset_us;
+            
+            ESP_LOGI(TAG, "synced from " MACSTR ", reported drift %d ms, offset now %lld us",
                     MAC2STR(evt->src_addr), evt->drift_ms, (long long)s_time_offset_us);
+        break;
 
-            if (!s_timer_started) {
-                /* First sync ever: bring the GPTimer up, phase-aligned to
-                * the master right from the very first tick. */
-                start_gptimer((uint64_t)get_synced_time_us());
-                s_timer_started = true;
-            } else {
-                /* Steady state: discipline the free-running hardware
-                * counter to cancel whatever phase error has built up
-                * since the last correction. */
-                realign_gptimer((uint64_t)get_synced_time_us());
-            }
-            break;
-        }
 
         case ESP_EVENT_ESPNOW_TIMESYNC_TIMEOUT:
-            ESP_LOGW(MAIN_TAG, "time sync request timed out, retrying");
+            ESP_LOGW(TAG, "time sync request timed out, retrying");
             espnow_time_responder_request();
             break;
 
@@ -239,18 +186,19 @@ static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t eve
 }
 
 esp_err_t init_espnow_timesync(void) {
-    ESP_ERROR_CHECK(nvs_flash_init());
+
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    // Wi-Fi Stack Initialization
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK( esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
-    // ESP-NOW Managed Core Initialization
     espnow_config_t espnow_cfg = ESPNOW_INIT_CONFIG_DEFAULT();
+    espnow_cfg.qsize = 32;
     ESP_ERROR_CHECK(espnow_init(&espnow_cfg));
 
     // Responder
@@ -262,7 +210,7 @@ esp_err_t init_espnow_timesync(void) {
     ESP_ERROR_CHECK(espnow_time_responder_start(&config));
     ESP_ERROR_CHECK(espnow_time_responder_request());
 
-    ESP_LOGI(MAIN_TAG, "ESPNOW initialized"); 
+    ESP_LOGI(TAG, "ESPNOW initialized"); 
     
     return ESP_OK;
 }
@@ -272,7 +220,7 @@ esp_err_t init_espnow_timesync(void) {
 
 void app_main()
 {
-    ESP_LOGI(MAIN_TAG, "Booting Slave Device...");
+    ESP_LOGI(TAG, "Booting Slave Device...");
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -282,17 +230,19 @@ void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
+    // led blinking 
     s_blink_evt_q = xQueueCreate(4, sizeof(uint64_t));
-    
+    xTaskCreate(blink_task, "blink_task", 4096, NULL, 5, &s_ledtask);
+
+
     //ESP_ERROR_CHECK(battery.Init());
     ESP_ERROR_CHECK(init_led());
     ESP_ERROR_CHECK(init_espnow_timesync());
+    ESP_ERROR_CHECK(init_gptimer());
     ESP_ERROR_CHECK(flashlog_init());
     ESP_ERROR_CHECK(imu_init());
     ESP_ERROR_CHECK(ble_control_init());
 
-    xTaskCreate(blink_task, "blink_task", 4096, NULL, 5, NULL);
-
-    ESP_LOGI(MAIN_TAG, "Slave ready - waiting for the first ESP-NOW time sync...");
+    ESP_LOGI(TAG, "Slave ready - waiting for the first ESP-NOW time sync...");
 
 }
