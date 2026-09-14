@@ -11,7 +11,7 @@ static inline int64_t get_synced_time_us(void)
 
 static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
 
- BaseType_t high_task_wakeup = pdFALSE;
+    BaseType_t high_task_wakeup = pdFALSE;
     
     uint64_t next_alarm = edata->count_value + period; 
     gptimer_alarm_config_t config = {
@@ -168,10 +168,9 @@ static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t eve
         case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED: 
             espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
             s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-            //period = period + s_time_offset_us;
-            
-            ESP_LOGI(TAG, "synced from " MACSTR ", reported drift %d ms, offset now %lld us",
-                    MAC2STR(evt->src_addr), evt->drift_ms, (long long)s_time_offset_us);
+            //period=period+s_time_offset_us;
+            ESP_LOGI(TAG, "timer now %lld, offset now %lld us",
+                    (long long), (long long)evt->synced_time_us);
         break;
 
 
