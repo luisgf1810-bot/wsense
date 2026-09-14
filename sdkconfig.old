@@ -693,7 +693,7 @@ CONFIG_IDF_TARGET_ARCH="riscv"
 # default:
 CONFIG_IDF_TARGET="esp32c6"
 # default:
-CONFIG_IDF_INIT_VERSION="6.1.0"
+CONFIG_IDF_INIT_VERSION="6.0.2"
 # default:
 CONFIG_IDF_TARGET_ESP32C6=y
 # default:
@@ -1030,11 +1030,6 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # Sense Configuration
 #
-# default:
-CONFIG_ESP_FTM_REPORT_LOG_ENABLE=y
-# default:
-CONFIG_ESP_FTM_REPORT_SHOW_TIMEDIFF=y
-# end of Sense Configuration
 
 #
 # Compiler options
@@ -1079,8 +1074,7 @@ CONFIG_COMPILER_STACK_CHECK_MODE_NONE=y
 # CONFIG_COMPILER_WARN_WRITE_STRINGS is not set
 # default:
 # CONFIG_COMPILER_SAVE_RESTORE_LIBCALLS is not set
-# default:
-# CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS is not set
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
 # default:
 # CONFIG_COMPILER_DISABLE_GCC12_WARNINGS is not set
 # default:
@@ -1744,6 +1738,13 @@ CONFIG_BT_LE_DFT_SYNC_SCHED_PRIO_LEVEL=1
 # CONFIG_BLE_MESH is not set
 
 #
+# Console Library
+#
+# default:
+# CONFIG_CONSOLE_SORTED_HELP is not set
+# end of Console Library
+
+#
 # Legacy Driver Configurations
 #
 
@@ -1778,6 +1779,31 @@ CONFIG_BT_LE_DFT_SYNC_SCHED_PRIO_LEVEL=1
 # default:
 CONFIG_EFUSE_MAX_BLK_LEN=256
 # end of eFuse Bit Manager
+
+#
+# ESP-TLS
+#
+# default:
+CONFIG_ESP_TLS_USING_MBEDTLS=y
+# default:
+# CONFIG_ESP_TLS_CUSTOM_STACK is not set
+# default:
+CONFIG_ESP_TLS_USE_DS_PERIPHERAL=y
+# default:
+# CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS is not set
+# default:
+# CONFIG_ESP_TLS_SERVER_SESSION_TICKETS is not set
+# default:
+# CONFIG_ESP_TLS_SERVER_CERT_SELECT_HOOK is not set
+# default:
+# CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL is not set
+# default:
+# CONFIG_ESP_TLS_PSK_VERIFICATION is not set
+# default:
+# CONFIG_ESP_TLS_INSECURE is not set
+# default:
+CONFIG_ESP_TLS_DYN_BUF_STRATEGY_SUPPORTED=y
+# end of ESP-TLS
 
 #
 # Wireless Coexistence
@@ -1931,6 +1957,65 @@ CONFIG_ESP_GDBSTUB_SUPPORT_TASKS=y
 # default:
 CONFIG_ESP_GDBSTUB_MAX_TASKS=32
 # end of GDB Stub
+
+#
+# ESP HTTP client
+#
+# default:
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
+# default:
+# CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH is not set
+# default:
+# CONFIG_ESP_HTTP_CLIENT_ENABLE_DIGEST_AUTH is not set
+# default:
+# CONFIG_ESP_HTTP_CLIENT_ENABLE_CUSTOM_TRANSPORT is not set
+# default:
+# CONFIG_ESP_HTTP_CLIENT_ENABLE_GET_CONTENT_RANGE is not set
+# default:
+CONFIG_ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT=2000
+# default:
+# CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS is not set
+# default:
+CONFIG_ESP_HTTP_CLIENT_STRICT_HEADER_BUFFER=y
+# end of ESP HTTP client
+
+#
+# HTTP Server
+#
+# default:
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+# default:
+CONFIG_HTTPD_MAX_URI_LEN=512
+# default:
+CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
+# default:
+CONFIG_HTTPD_PURGE_BUF_LEN=32
+# default:
+# CONFIG_HTTPD_LOG_PURGE_DATA is not set
+# default:
+# CONFIG_HTTPD_WS_SUPPORT is not set
+# default:
+# CONFIG_HTTPD_QUEUE_WORK_BLOCKING is not set
+# default:
+CONFIG_HTTPD_ENABLE_EVENTS=y
+# default:
+CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT=2000
+# end of HTTP Server
+
+#
+# ESP HTTPS OTA
+#
+# default:
+# CONFIG_ESP_HTTPS_OTA_DECRYPT_CB is not set
+# default:
+# CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP is not set
+# default:
+CONFIG_ESP_HTTPS_OTA_EVENT_POST_TIMEOUT=2000
+# default:
+# CONFIG_ESP_HTTPS_OTA_ENABLE_PARTIAL_DOWNLOAD is not set
+# default:
+CONFIG_ESP_HTTPS_OTA_VERIFY_SPI_MODE=y
+# end of ESP HTTPS OTA
 
 #
 # Hardware Settings
@@ -2102,12 +2187,8 @@ CONFIG_ESP_INTR_IN_IRAM=y
 #
 # LibC
 #
-# default:
-# CONFIG_LIBC_NEWLIB is not set
-# default:
-CONFIG_LIBC_PICOLIBC=y
-# default:
-CONFIG_LIBC_PICOLIBC_NEWLIB_COMPATIBILITY=y
+CONFIG_LIBC_NEWLIB=y
+# CONFIG_LIBC_PICOLIBC is not set
 # default:
 CONFIG_LIBC_MISC_IN_IRAM=y
 # default:
@@ -2124,6 +2205,8 @@ CONFIG_LIBC_STDOUT_LINE_ENDING_CRLF=y
 # CONFIG_LIBC_STDIN_LINE_ENDING_LF is not set
 # default:
 CONFIG_LIBC_STDIN_LINE_ENDING_CR=y
+# default:
+# CONFIG_LIBC_NEWLIB_NANO_FORMAT is not set
 # default:
 CONFIG_LIBC_TIME_SYSCALL_USE_RTC_HRT=y
 # default:
@@ -2489,9 +2572,8 @@ CONFIG_ESP_WIFI_BSS_MAX_IDLE_SUPPORT=y
 CONFIG_ESP_WIFI_SLP_DEFAULT_MAX_ACTIVE_TIME=10
 # default:
 CONFIG_ESP_WIFI_SLP_DEFAULT_WAIT_BROADCAST_DATA_TIME=15
-CONFIG_ESP_WIFI_FTM_ENABLE=y
-# CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT is not set
-# CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT is not set
+# default:
+# CONFIG_ESP_WIFI_FTM_ENABLE is not set
 # default:
 CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=y
 # default:
@@ -2724,6 +2806,110 @@ CONFIG_ESP_WIFI_REMOTE_EAP_ENABLED=y
 # end of Wi-Fi Remote
 
 #
+# FAT Filesystem support
+#
+# default:
+CONFIG_FATFS_VOLUME_COUNT=2
+# default:
+# CONFIG_FATFS_LFN_NONE is not set
+# default:
+CONFIG_FATFS_LFN_HEAP=y
+# default:
+# CONFIG_FATFS_LFN_STACK is not set
+# default:
+# CONFIG_FATFS_SECTOR_512 is not set
+# default:
+CONFIG_FATFS_SECTOR_4096=y
+# default:
+# CONFIG_FATFS_CODEPAGE_DYNAMIC is not set
+# default:
+CONFIG_FATFS_CODEPAGE_437=y
+# default:
+# CONFIG_FATFS_CODEPAGE_720 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_737 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_771 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_775 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_850 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_852 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_855 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_857 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_860 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_861 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_862 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_863 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_864 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_865 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_866 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_869 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_932 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_936 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_949 is not set
+# default:
+# CONFIG_FATFS_CODEPAGE_950 is not set
+# default:
+CONFIG_FATFS_CODEPAGE=437
+# default:
+CONFIG_FATFS_MAX_LFN=255
+# default:
+CONFIG_FATFS_API_ENCODING_ANSI_OEM=y
+# default:
+# CONFIG_FATFS_API_ENCODING_UTF_8 is not set
+# default:
+CONFIG_FATFS_FS_LOCK=0
+# default:
+CONFIG_FATFS_TIMEOUT_MS=10000
+# default:
+CONFIG_FATFS_PER_FILE_CACHE=y
+# default:
+# CONFIG_FATFS_ALLOC_PREFER_ALIGNED_WORK_BUFFERS is not set
+# default:
+# CONFIG_FATFS_USE_FASTSEEK is not set
+# default:
+CONFIG_FATFS_USE_STRFUNC_NONE=y
+# default:
+# CONFIG_FATFS_USE_STRFUNC_WITHOUT_CRLF_CONV is not set
+# default:
+# CONFIG_FATFS_USE_STRFUNC_WITH_CRLF_CONV is not set
+# default:
+CONFIG_FATFS_VFS_FSTAT_BLKSIZE=0
+# default:
+# CONFIG_FATFS_IMMEDIATE_FSYNC is not set
+# default:
+# CONFIG_FATFS_USE_LABEL is not set
+# default:
+CONFIG_FATFS_LINK_LOCK=y
+# default:
+CONFIG_FATFS_USE_DYN_BUFFERS=y
+
+#
+# File system free space calculation behavior
+#
+# default:
+CONFIG_FATFS_DONT_TRUST_FREE_CLUSTER_CNT=0
+# default:
+CONFIG_FATFS_DONT_TRUST_LAST_ALLOC=0
+# end of File system free space calculation behavior
+# end of FAT Filesystem support
+
+#
 # FreeRTOS
 #
 
@@ -2732,8 +2918,7 @@ CONFIG_ESP_WIFI_REMOTE_EAP_ENABLED=y
 #
 # default:
 CONFIG_FREERTOS_UNICORE=y
-# default:
-CONFIG_FREERTOS_HZ=100
+CONFIG_FREERTOS_HZ=1000
 # default:
 CONFIG_FREERTOS_OPTIMIZED_SCHEDULER=y
 # default:
@@ -2994,7 +3179,7 @@ CONFIG_LWIP_SO_REUSE=y
 # default:
 CONFIG_LWIP_SO_REUSE_RXTOALL=y
 # default:
-# CONFIG_LWIP_SO_RCVBUF is not set
+CONFIG_LWIP_SO_RCVBUF=y
 # default:
 # CONFIG_LWIP_NETBUF_RECVINFO is not set
 # default:
@@ -3141,7 +3326,29 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY_NO_AFFINITY=y
 # default:
 CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x7FFFFFFF
 # default:
-# CONFIG_LWIP_PPP_SUPPORT is not set
+CONFIG_LWIP_PPP_SUPPORT=y
+# default:
+CONFIG_LWIP_PPP_ENABLE_IPV4=y
+# default:
+# CONFIG_LWIP_PPP_NOTIFY_PHASE_SUPPORT is not set
+# default:
+# CONFIG_LWIP_PPP_PAP_SUPPORT is not set
+# default:
+# CONFIG_LWIP_PPP_CHAP_SUPPORT is not set
+# default:
+# CONFIG_LWIP_PPP_MSCHAP_SUPPORT is not set
+# default:
+# CONFIG_LWIP_PPP_MPPE_SUPPORT is not set
+# default:
+# CONFIG_LWIP_PPP_SERVER_SUPPORT is not set
+# default:
+CONFIG_LWIP_PPP_VJ_HEADER_COMPRESSION=y
+# default:
+# CONFIG_LWIP_ENABLE_LCP_ECHO is not set
+# default:
+# CONFIG_LWIP_PPP_DEBUG_ON is not set
+# default:
+# CONFIG_LWIP_USE_EXTERNAL_MBEDTLS is not set
 # default:
 # CONFIG_LWIP_SLIP_SUPPORT is not set
 
@@ -3611,6 +3818,18 @@ CONFIG_MBEDTLS_PKCS1_V21=y
 # end of NVS
 
 #
+# Protocomm
+#
+# default:
+# CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0 is not set
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+# default:
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2=y
+# default:
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_PATCH_VERSION=y
+# end of Protocomm
+
+#
 # PThreads
 #
 # default:
@@ -3624,6 +3843,13 @@ CONFIG_PTHREAD_TASK_CORE_DEFAULT=-1
 # default:
 CONFIG_PTHREAD_TASK_NAME_DEFAULT="pthread"
 # end of PThreads
+
+#
+# SD Protocol Layer Configuration
+#
+# default:
+CONFIG_SD_ENABLE_SDIO_SUPPORT=y
+# end of SD Protocol Layer Configuration
 
 #
 # MMU Config
@@ -3727,6 +3953,78 @@ CONFIG_SPI_FLASH_ENABLE_ENCRYPTED_READ_WRITE=y
 # end of SPI Flash driver
 
 #
+# SPIFFS Configuration
+#
+# default:
+CONFIG_SPIFFS_MAX_PARTITIONS=3
+
+#
+# SPIFFS Cache Configuration
+#
+# default:
+CONFIG_SPIFFS_CACHE=y
+# default:
+CONFIG_SPIFFS_CACHE_WR=y
+# default:
+# CONFIG_SPIFFS_CACHE_STATS is not set
+# end of SPIFFS Cache Configuration
+
+# default:
+CONFIG_SPIFFS_PAGE_CHECK=y
+# default:
+CONFIG_SPIFFS_GC_MAX_RUNS=10
+# default:
+# CONFIG_SPIFFS_GC_STATS is not set
+# default:
+CONFIG_SPIFFS_PAGE_SIZE=256
+# default:
+CONFIG_SPIFFS_OBJ_NAME_LEN=32
+# default:
+# CONFIG_SPIFFS_FOLLOW_SYMLINKS is not set
+# default:
+CONFIG_SPIFFS_USE_MAGIC=y
+# default:
+CONFIG_SPIFFS_USE_MAGIC_LENGTH=y
+# default:
+CONFIG_SPIFFS_META_LENGTH=4
+# default:
+CONFIG_SPIFFS_USE_MTIME=y
+
+#
+# Debug Configuration
+#
+# default:
+# CONFIG_SPIFFS_DBG is not set
+# default:
+# CONFIG_SPIFFS_API_DBG is not set
+# default:
+# CONFIG_SPIFFS_GC_DBG is not set
+# default:
+# CONFIG_SPIFFS_CACHE_DBG is not set
+# default:
+# CONFIG_SPIFFS_CHECK_DBG is not set
+# default:
+# CONFIG_SPIFFS_TEST_VISUALISATION is not set
+# end of Debug Configuration
+# end of SPIFFS Configuration
+
+#
+# TCP Transport
+#
+
+#
+# Websocket
+#
+# default:
+CONFIG_WS_TRANSPORT=y
+# default:
+CONFIG_WS_BUFFER_SIZE=1024
+# default:
+# CONFIG_WS_DYNAMIC_BUFFER is not set
+# end of Websocket
+# end of TCP Transport
+
+#
 # Virtual file system
 #
 # default:
@@ -3756,6 +4054,154 @@ CONFIG_VFS_SEMIHOSTFS_MAX_MOUNT_POINTS=1
 # default:
 CONFIG_VFS_INITIALIZE_DEV_NULL=y
 # end of Virtual file system
+
+#
+# Wear Levelling
+#
+# default:
+# CONFIG_WL_SECTOR_SIZE_512 is not set
+# default:
+CONFIG_WL_SECTOR_SIZE_4096=y
+# default:
+CONFIG_WL_SECTOR_SIZE=4096
+# end of Wear Levelling
+
+#
+# CMake Utilities
+#
+# default:
+# CONFIG_CU_RELINKER_ENABLE is not set
+# default:
+# CONFIG_CU_DIAGNOSTICS_COLOR_NEVER is not set
+# default:
+CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
+# default:
+# CONFIG_CU_DIAGNOSTICS_COLOR_AUTO is not set
+# default:
+# CONFIG_CU_GCC_LTO_ENABLE is not set
+# default:
+# CONFIG_CU_GCC_STRING_1BYTE_ALIGN is not set
+# end of CMake Utilities
+
+#
+# ESP-NOW Configuration
+#
+
+#
+# ESP-NOW Security Configuration
+#
+# default:
+CONFIG_ESPNOW_APP_SECURITY=y
+# default:
+# CONFIG_ESPNOW_ALL_SECURITY is not set
+# default:
+# CONFIG_ESPNOW_CONTROL_SECURITY is not set
+# default:
+# CONFIG_ESPNOW_DEBUG_SECURITY is not set
+# default:
+# CONFIG_ESPNOW_OTA_SECURITY is not set
+# default:
+# CONFIG_ESPNOW_PROV_SECURITY is not set
+# end of ESP-NOW Security Configuration
+
+#
+# ESP-NOW Light Sleep Configuration
+#
+# default:
+# CONFIG_ESPNOW_LIGHT_SLEEP is not set
+# end of ESP-NOW Light Sleep Configuration
+
+#
+# ESP-NOW Control Configuration
+#
+# default:
+# CONFIG_ESPNOW_CONTROL_AUTO_CHANNEL_SENDING is not set
+# end of ESP-NOW Control Configuration
+
+#
+# ESP-NOW OTA configuration
+#
+# default:
+CONFIG_ESPNOW_OTA_RETRANSMISSION_TIMES=2
+# default:
+CONFIG_ESPNOW_OTA_RETRY_COUNT=50
+# default:
+CONFIG_ESPNOW_OTA_SEND_FORWARD_TTL=0
+# default:
+CONFIG_ESPNOW_OTA_SEND_FORWARD_RSSI=-65
+# default:
+CONFIG_ESPNOW_OTA_WAIT_RESPONSE_TIMEOUT=10000
+# end of ESP-NOW OTA configuration
+
+# default:
+# CONFIG_ESPNOW_AUTO_RESTORE_CHANNEL is not set
+# default:
+# CONFIG_ESPNOW_DATA_FAST_ACK is not set
+
+#
+# ESP-NOW Task Configuration
+#
+
+#
+# Avoid heavy processing in handlers; offload to app task via queues.
+#
+# default:
+CONFIG_ESPNOW_TASK_STACK_SIZE=4096
+# default:
+CONFIG_ESPNOW_TASK_PRIORITY=1
+# end of ESP-NOW Task Configuration
+
+#
+# ESP-NOW Utils Configuration
+#
+# default:
+CONFIG_ESPNOW_MEM_ALLOCATION_DEFAULT=y
+# default:
+CONFIG_ESPNOW_MEM_DEBUG=y
+# default:
+CONFIG_ESPNOW_MEM_DBG_INFO_MAX=128
+# default:
+CONFIG_ESPNOW_NVS_NAMESPACE="espnow"
+# default:
+CONFIG_ESPNOW_REBOOT_UNBROKEN_INTERVAL_TIMEOUT=5000
+# default:
+CONFIG_ESPNOW_REBOOT_UNBROKEN_FALLBACK_COUNT=30
+# end of ESP-NOW Utils Configuration
+
+#
+# ESP-NOW Debug Configuration
+#
+
+#
+# Debug console Configuration
+#
+# default:
+CONFIG_ESPNOW_STORE_HISTORY=y
+# end of Debug console Configuration
+
+#
+# Debug Log Configuration
+#
+# default:
+CONFIG_ESPNOW_DEBUG_LOG_PARTITION_LABEL_DATA="log_info"
+# default:
+CONFIG_ESPNOW_DEBUG_LOG_PARTITION_LABEL_NVS="log_status"
+# default:
+CONFIG_ESPNOW_DEBUG_LOG_FILE_MAX_SIZE=65536
+# default:
+CONFIG_ESPNOW_DEBUG_LOG_PARTITION_OFFSET=0
+# default:
+# CONFIG_ESPNOW_DEBUG_LOG_PRINTF_ENABLE is not set
+# end of Debug Log Configuration
+
+# default:
+CONFIG_ESPNOW_DEBUG_CONSOLE_UART_NUM_0=y
+# default:
+# CONFIG_ESPNOW_DEBUG_CONSOLE_UART_NUM_1 is not set
+# default:
+CONFIG_ESPNOW_DEBUG_CONSOLE_UART_NUM=0
+# end of ESP-NOW Debug Configuration
+# end of ESP-NOW Configuration
 
 #
 # BNO085 Driver (Hardware Level)
@@ -3856,6 +4302,7 @@ CONFIG_POST_EVENTS_FROM_ISR=y
 CONFIG_POST_EVENTS_FROM_IRAM_ISR=y
 CONFIG_GDBSTUB_SUPPORT_TASKS=y
 CONFIG_GDBSTUB_MAX_TASKS=32
+# CONFIG_OTA_ALLOW_HTTP is not set
 # CONFIG_ESP_SYSTEM_PD_FLASH is not set
 CONFIG_PERIPH_CTRL_FUNC_IN_IRAM=y
 CONFIG_BROWNOUT_DET=y
@@ -3873,6 +4320,7 @@ CONFIG_NEWLIB_STDOUT_LINE_ENDING_CRLF=y
 # CONFIG_NEWLIB_STDIN_LINE_ENDING_CRLF is not set
 # CONFIG_NEWLIB_STDIN_LINE_ENDING_LF is not set
 CONFIG_NEWLIB_STDIN_LINE_ENDING_CR=y
+# CONFIG_NEWLIB_NANO_FORMAT is not set
 CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT=y
 # CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC is not set
 # CONFIG_NEWLIB_TIME_SYSCALL_USE_HRT is not set
@@ -3984,7 +4432,13 @@ CONFIG_TCPIP_TASK_STACK_SIZE=3072
 CONFIG_TCPIP_TASK_AFFINITY_NO_AFFINITY=y
 # CONFIG_TCPIP_TASK_AFFINITY_CPU0 is not set
 CONFIG_TCPIP_TASK_AFFINITY=0x7FFFFFFF
-# CONFIG_PPP_SUPPORT is not set
+CONFIG_PPP_SUPPORT=y
+# CONFIG_PPP_NOTIFY_PHASE_SUPPORT is not set
+# CONFIG_PPP_PAP_SUPPORT is not set
+# CONFIG_PPP_CHAP_SUPPORT is not set
+# CONFIG_PPP_MSCHAP_SUPPORT is not set
+# CONFIG_PPP_MPPE_SUPPORT is not set
+# CONFIG_PPP_DEBUG_ON is not set
 # CONFIG_MBEDTLS_ATCA_HW_ECDSA_SIGN is not set
 # CONFIG_MBEDTLS_ATCA_HW_ECDSA_VERIFY is not set
 CONFIG_ESP32_PTHREAD_TASK_PRIO_DEFAULT=5
