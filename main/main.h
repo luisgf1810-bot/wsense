@@ -70,7 +70,6 @@ uint8_t _i2c_write_size = 0;
 float x = 0.0;  
 float y = 0.0;  
 float z = 0.0;  
-static int64_t start_time, end_time  = 0;  
 
 
 // LED
@@ -80,28 +79,27 @@ static int64_t start_time, end_time  = 0;
 #define TIMER_RESOLUTION_HZ        (1000000ULL) // 1 MHz (1 tick = 1 us)
 #define TIMESYNC_BROADCAST_INTERVAL_MS 5000
 #define BLINKER_MIN_CORRECTION_US 200ULL
+#define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
 
 static TaskHandle_t         s_ledtask      = NULL;
 static gptimer_handle_t     s_gptimer_led  = NULL;
 static QueueHandle_t        s_blink_evt_q  = NULL;
-static led_strip_handle_t   s_led          = NULL;
-static volatile bool        s_timer_started = false;
+static led_strip_handle_t   s_led_strip    = NULL;
+static bool                 s_timer_started = false;
 static uint                 rcolor=7;
 static uint                 gcolor=0;
 static uint                 ondelay=80;
 static uint64_t             period=3000000;
+static int                  s_last_applied_state = -1;
+static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
 
 // ESPNOW time sync
 #define TS_REPORT_BIT      BIT0
 #define TS_FAILURE_BIT     BIT1
 #define TS_SYNC_PERIOD_MS  1000  
 
-static TaskHandle_t         timesync_task_handle = NULL;
-static EventGroupHandle_t   s_ts_evt_group = NULL;
 static int64_t              s_time_offset_us = 0;
-static int64_t              s_time_offset_ms = 0;
-static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t             s_sync_count = 0;
-static int64_t              s_next_alarm_target_us = 0;
+
 
 

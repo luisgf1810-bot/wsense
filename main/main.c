@@ -9,17 +9,54 @@ static inline int64_t get_synced_time_us(void)
     return esp_timer_get_time() + s_time_offset_us;
 }
 
+/* Compute the number of ticks from "now" (phase_reference_us) to the
+ * next BLINKER_PERIOD_US-aligned boundary, guaranteed to be >=
+ * BLINKER_MIN_SCHEDULE_AHEAD_US. */
+static uint64_t ticks_to_next_boundary(uint64_t phase_now)
+{
+    uint64_t delay = period - (phase_now % period);
+    if (delay < BLINKER_MIN_SCHEDULE_AHEAD_US) {
+        delay += period;
+    }
+    return delay;
+}
+
+void blinker_led_apply(uint64_t phase_now)
+{
+    if (!s_led_strip) {static int s_last_applied_state = -1;
+        return;
+    }
+
+    /* THE key line: LED state is a pure function of the shared clock,
+     * never of our own previous state. Both boards compute the same
+     * value from the same number, so they cannot end up inverted
+     * relative to each other no matter how a correction shifts them. */
+    int state = (int)((phase_now / period) % 2ULL);
+
+    if (state == s_last_applied_state) {
+        return; /* already showing this; don't re-send an RMT frame */
+    }
+    s_last_applied_state = state;
+
+    esp_err_t err;
+    if (state == 0) {
+        led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); /* dim green */
+        err = led_strip_refresh(s_led_strip);
+    } else {
+        err = led_strip_clear(s_led_strip);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "led update failed: %s", esp_err_to_name(err));
+    }
+}
+
+
+
 static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
 
     BaseType_t high_task_wakeup = pdFALSE;
     
-    uint64_t next_alarm = edata->count_value + period; 
-    gptimer_alarm_config_t config = {
-        .alarm_count = next_alarm,
-        .flags.auto_reload_on_alarm = false,
-    };
-    gptimer_set_alarm_action(timer, &config);
-
     uint8_t evt = 1;
     xQueueSendFromISR(s_blink_evt_q, &evt, &high_task_wakeup);
     return high_task_wakeup == pdTRUE;
@@ -33,8 +70,13 @@ static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_a
     return high_task_awoken == pdTRUE;
 }
 
-esp_err_t init_gptimer() {
-      gptimer_config_t timer_config = {
+esp_err_t init_gptimer(uint64_t phase_now) {
+
+    if (s_gptimer_led != NULL) {
+        return ESP_ERR_INVALID_STATE; 
+    }
+
+    gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
         .direction = GPTIMER_COUNT_UP,
         .resolution_hz = TIMER_RESOLUTION_HZ,
@@ -48,30 +90,60 @@ esp_err_t init_gptimer() {
     ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
 
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = period,             
+        .alarm_count = ticks_to_next_boundary(phase_now),             
         .flags.auto_reload_on_alarm = false 
     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &alarm_config));
     ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
 
-    ESP_LOGI(TAG, "GPTimer started, initial phase = %llu us", (unsigned long long)period);
+    /* Show the correct state immediately rather than waiting up to 3 s
+     * for the first alarm. */
+    blinker_led_apply(phase_now);
+
+    ESP_LOGI(TAG, "GPTimer started, first alarm in %llu us", (unsigned long long)alarm_config.alarm_count);
 
     return ESP_OK;
 }
 
+esp_err_t blinker_timer_arm_next(uint64_t phase_now)
+{
+    if (s_gptimer_led == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
+    portENTER_CRITICAL(&s_timer_lock);
+    uint64_t current_raw = 0;
+    ESP_ERROR_CHECK(gptimer_get_raw_count(s_gptimer_led, &current_raw));
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = current_raw + ticks_to_next_boundary(phase_now),
+        .reload_count = 0, 
+        .flags.auto_reload_on_alarm = false,
+    };
+    esp_err_t err = gptimer_set_alarm_action(s_gptimer_led, &alarm_config);
+    portEXIT_CRITICAL(&s_timer_lock);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to arm next alarm: %s", esp_err_to_name(err));
+    }
+
+    //ESP_LOGI(TAG, "next alarm: %lld", current_raw + delay);
+
+    return err;
+}
 
 
 /* --- LED and blink task--- */
+
+
 void blinker_led_toggle(void)
 {
-    if (!s_led) {
+    if (!s_led_strip) {
         return;
     }
-    led_strip_set_pixel(s_led, 0, rcolor, gcolor, 0); 
-    led_strip_refresh(s_led);
+    led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); 
+    led_strip_refresh(s_led_strip);
     vTaskDelay(ondelay);
-    led_strip_clear(s_led);
+    led_strip_clear(s_led_strip);
 }
 
 static void blink_task(void *arg)
@@ -79,7 +151,14 @@ static void blink_task(void *arg)
     uint64_t tick;
     for (;;) {
         if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
-            blinker_led_toggle();
+            uint64_t now = get_synced_time_us();
+            blinker_led_apply(now);
+            ESP_LOGI(TAG, "blink @ t = %lld us (reference clock)", (long long)now);
+
+            /* Re-arm the next one-shot alarm right away - the timer
+             * never auto-reloads, so this is the only thing keeping it
+             * running every 3s. */
+            ESP_ERROR_CHECK(blinker_timer_arm_next(now));
         }
     }
 }
@@ -103,8 +182,8 @@ esp_err_t init_led(void) {
         .resolution_hz = 10 * 1000 * 1000,
         .flags.with_dma = false,
     };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
-    led_strip_clear(s_led);
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip));
+    led_strip_clear(s_led_strip);
 
     ESP_LOGI(TAG, "LED initialized"); 
 
@@ -159,18 +238,30 @@ esp_err_t imu_init() {
 
 
 
-
-
-
 /* --- Initialize Wi-Fi & ESP-NOW Managed Sync --- */
 static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
     switch (event_id) {
-        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED: 
+        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED:      
             espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
             s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-            //period=period+s_time_offset_us;
-            ESP_LOGI(TAG, "timer now %lld, offset now %lld us",
-                    (long long), (long long)evt->synced_time_us);
+
+           if (!s_timer_started) {
+                /* First sync ever: bring the GPTimer up, phase-aligned to
+                * the master right from the very first tick. From here on,
+                * blink_task() re-arms every subsequent alarm itself using
+                * whatever offset is current, so no further action is
+                * needed here on later sync events - updating
+                * s_time_offset_us above is enough to discipline the next
+                * scheduled alarm. */
+                ESP_ERROR_CHECK(init_gptimer((uint64_t)get_synced_time_us()));
+                s_timer_started = true;
+           } else {
+                uint64_t now = (uint64_t)get_synced_time_us();
+                blinker_timer_arm_next(now);
+                blinker_led_apply(now);
+           }
+
+            //ESP_LOGI(TAG, " synced:%lld us - timenow:%lld us ", (long long)evt->synced_time_us, (long long)esp_timer_get_time());
         break;
 
 
@@ -237,7 +328,6 @@ void app_main()
     //ESP_ERROR_CHECK(battery.Init());
     ESP_ERROR_CHECK(init_led());
     ESP_ERROR_CHECK(init_espnow_timesync());
-    ESP_ERROR_CHECK(init_gptimer());
     ESP_ERROR_CHECK(flashlog_init());
     ESP_ERROR_CHECK(imu_init());
     ESP_ERROR_CHECK(ble_control_init());
