@@ -1,9 +1,6 @@
 #include "main.h"
 
 
-
-/* --- Initialize and realign GPTimer --- */
-
 static inline int64_t get_synced_time_us(void)
 {
     return esp_timer_get_time() + s_time_offset_us;
@@ -23,7 +20,7 @@ static uint64_t ticks_to_next_boundary(uint64_t phase_now)
 
 void blinker_led_apply(uint64_t phase_now)
 {
-    if (!s_led_strip) {static int s_last_applied_state = -1;
+    if (!s_led_strip) {
         return;
     }
 
@@ -133,19 +130,6 @@ esp_err_t blinker_timer_arm_next(uint64_t phase_now)
 
 
 /* --- LED and blink task--- */
-
-
-void blinker_led_toggle(void)
-{
-    if (!s_led_strip) {
-        return;
-    }
-    led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); 
-    led_strip_refresh(s_led_strip);
-    vTaskDelay(ondelay);
-    led_strip_clear(s_led_strip);
-}
-
 static void blink_task(void *arg)
 {
     uint64_t tick;
