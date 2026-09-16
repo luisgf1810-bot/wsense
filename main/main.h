@@ -89,7 +89,7 @@ static bool                 s_timer_started = false;
 static uint                 rcolor=7;
 static uint                 gcolor=0;
 static uint                 ondelay=80;
-static uint64_t             period=3000000;
+static uint64_t             period=1500000;
 static int                  s_last_applied_state = -1;
 static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
 
