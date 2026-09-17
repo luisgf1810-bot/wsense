@@ -137,9 +137,19 @@ static void blink_task(void *arg)
     uint64_t tick;
     for (;;) {
         if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
+
+
+            led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); 
+            led_strip_refresh(s_led_strip);
+            vTaskDelay(80);
+            led_strip_clear(s_led_strip);
             uint64_t now = get_synced_time_us();
-            blinker_led_apply(now);
-            ESP_LOGI(TAG, "blink @ t = %lld us (reference clock)", (long long)now);
+            //blinker_led_apply(now);
+
+            uint64_t tick = now / period;
+            ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us  (offset %lld us)",
+                     tick, now, (long long)s_time_offset_us);
+           
 
             /* Re-arm the next one-shot alarm right away - the timer
              * never auto-reloads, so this is the only thing keeping it
@@ -244,7 +254,7 @@ static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t eve
            } else {
                 uint64_t now = (uint64_t)get_synced_time_us();
                 blinker_timer_arm_next(now);
-                blinker_led_apply(now);
+                //blinker_led_apply(now);
            }
 
             //ESP_LOGI(TAG, " synced:%lld us - timenow:%lld us ", (long long)evt->synced_time_us, (long long)esp_timer_get_time());
