@@ -1,6 +1,6 @@
 idf_component_register(
     
-    SRCS "main.c" "ble_control.c" "imu_flash_log.c"
+    SRCS "main.c" "ble_control.c"
 
     INCLUDE_DIRS "." 
 

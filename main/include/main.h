@@ -35,12 +35,14 @@
 
 #include "led_strip.h"
 #include "ble_control.h"
-#include "imu_flash_log.h"
-#include "bno085.h"
+#include "imu.h"
+
 
 
 // Logs
 static const char *TAG = "MAIN";
+
+
 
 
 // IMU
@@ -72,6 +74,19 @@ float y = 0.0;
 float z = 0.0;  
 
 
+
+// LED
+#define LED_SLP_PIN   20
+#define LED_PIN   19                
+#define LED_STRIP_NUM_PIXELS 1      
+#define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
+
+static led_strip_handle_t   s_led_strip    = NULL;
+static uint                 gcolor=7;
+
+
+
+
 // LED
 #define LED_SLP_PIN   20
 #define LED_PIN   19                
@@ -86,8 +101,10 @@ static gptimer_handle_t     s_gptimer_led  = NULL;
 static QueueHandle_t        s_blink_evt_q  = NULL;
 static led_strip_handle_t   s_led_strip    = NULL;
 static bool                 s_timer_started = false;
+static bool                 s_sync_state = false;
 static uint                 rcolor=7;
 static uint                 gcolor=0;
+static uint                 sync_count=0;
 static uint                 ondelay=80;
 static uint64_t             period=3000000;
 static int                  s_last_applied_state = -1;
@@ -103,3 +120,51 @@ static uint32_t             s_sync_count = 0;
 
 
 
+/*  Battery */
+esp_err_t init_battery() ;
+
+/* Initialize led strip */
+esp_err_t init_led(void) ;
+
+/* Initialize Wi-Fi & ESP-NOW TIME Sync */
+esp_err_t init_espnow_timesync(void) ;
+
+/* GPTimer Init and ISR Callback  */
+static uint64_t ticks_to_next_boundary(uint64_t phase_now);
+static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata,  void *user_ctx);
+esp_err_t init_gptimer(uint64_t phase_now) ;
+esp_err_t gptimer_arm_next(uint64_t phase_now);
+static void timer_task(void *arg);
+
+
+/* IMU  */
+static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx);
+esp_err_t init_imu() ;
+
+
+/* Flash functions */
+static inline bool seq_is_newer(uint32_t a, uint32_t b);
+void imu_flash_log_get_stats(imu_log_stats_t *out);
+esp_err_t init_flash(void) ;
+esp_err_t flash_log_start(void);
+esp_err_t flash_log_stop(void) ;
+esp_err_t imu_flash_log_flush_partial(void);
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
+static void write_sector_to_flash(log_sector_t *sec);
+
+
+/* Flash functions */
+static inline bool seq_is_newer(uint32_t a, uint32_t b);
+void imu_flash_log_get_stats(imu_log_stats_t *out);
+esp_err_t init_flash(void);
+esp_err_t flash_log_start(void);
+esp_err_t flash_log_stop(void);
+esp_err_t imu_flash_log_flush_partial(void);
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
+static void write_sector_to_flash(log_sector_t *sec);
+static void flash_task(void *arg);
+
+
+/* BLE Commands */
+void start_imulogs() ;
+void stop_imulogs() ;
