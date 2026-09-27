@@ -1,5 +1,4 @@
 #include "ble_control.h"
-#include "imu_flash_log.h"
 #include <string.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -295,7 +294,7 @@ static void nimble_host_config_init(void) {
 /* Public entry point                                                    */
 /* -------------------------------------------------------------------- */
 
-esp_err_t ble_control_init(void)
+esp_err_t init_ble(void)
 {
     // Initialize NVS
     esp_err_t err = nvs_flash_init(); 
@@ -325,8 +324,7 @@ esp_err_t ble_control_init(void)
 
     // Set GAP device name
     ble_svc_gap_device_name_set(DEVICE_NAME);
-/* Library function declarations */
-void ble_store_config_init(void)            ;
+
     /* Set host callbacks */
     ble_hs_cfg.sync_cb  = on_sync;
     ble_hs_cfg.reset_cb = on_reset;

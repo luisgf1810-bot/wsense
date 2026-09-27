@@ -2,7 +2,7 @@ idf_component_register(
     
     SRCS "main.c" "ble_control.c"
 
-    INCLUDE_DIRS "." 
+    INCLUDE_DIRS "./include" 
 
     PRIV_REQUIRES   spi_flash 
                     nvs_flash
@@ -12,6 +12,7 @@ idf_component_register(
                     esp_wifi 
                     esp_driver_gpio 
                     esp_driver_i2c  
+                    esp_partition
                     bt
                     led_strip 
                     bno085

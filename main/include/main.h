@@ -45,33 +45,17 @@ static const char *TAG = "MAIN";
 
 
 
-// IMU
-#define SECTOR_SIZE             4096UL
-// 16KB RAM buffer to absorb flash erase latency
-#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  
-#define IMU_SAMPLING_RATE_HZ    1000                
-#define SENS_ON_PIN 18UTAG
-#define MOTION_WAKEUP_PIN 7U
+// TIMER
+#define GPTIMER_RESOLUTION_HZ   (1000000ULL) // 1 MHz (1 tick = 1 us)
+#define TIMESYNC_BLINK_HZ       (4000000ULL)
 
-// 10-byte packed structural representation of one IMU reading 
-typedef struct __attribute__((packed)) {
-    uint32_t timestamp_us; 
-    int16_t accel_x;
-    int16_t accel_y;
-    int16_t accel_z;
-} imu_sample_t;
-
-static StreamBufferHandle_t xImuStreamBuffer = NULL;
-static bno085_handle_t      bno085;
-static gptimer_handle_t     s_gptimer_imu = NULL;
-
-float _motion_data[23] = { 0.0 };
-uint8_t _i2c_write_array[10] = { 0 };
-uint8_t _i2c_read_array[10] = { 0 };
-uint8_t _i2c_write_size = 0;
-float x = 0.0;  
-float y = 0.0;  
-float z = 0.0;  
+static bool                     s_timesync_state    = true;
+static TaskHandle_t             s_gptimer_task      = NULL;
+static gptimer_handle_t         s_gptimer           = NULL;
+static QueueHandle_t            s_gptimer_evt_q     = NULL;
+static portMUX_TYPE             s_gptimer_lock      = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t                 gptimer_period      = TIMESYNC_BLINK_HZ;
+static volatile bool            s_timer_started     = false;
 
 
 
@@ -82,41 +66,90 @@ float z = 0.0;
 #define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
 
 static led_strip_handle_t   s_led_strip    = NULL;
-static uint                 gcolor=7;
-
-
-
-
-// LED
-#define LED_SLP_PIN   20
-#define LED_PIN   19                
-#define LED_STRIP_NUM_PIXELS 1      
-#define TIMER_RESOLUTION_HZ        (1000000ULL) // 1 MHz (1 tick = 1 us)
-#define TIMESYNC_BROADCAST_INTERVAL_MS 5000
-#define BLINKER_MIN_CORRECTION_US 200ULL
-#define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
-
-static TaskHandle_t         s_ledtask      = NULL;
-static gptimer_handle_t     s_gptimer_led  = NULL;
-static QueueHandle_t        s_blink_evt_q  = NULL;
-static led_strip_handle_t   s_led_strip    = NULL;
-static bool                 s_timer_started = false;
-static bool                 s_sync_state = false;
-static uint                 rcolor=7;
 static uint                 gcolor=0;
-static uint                 sync_count=0;
-static uint                 ondelay=80;
-static uint64_t             period=3000000;
-static int                  s_last_applied_state = -1;
-static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
+static uint                 rcolor=7;
 
 // ESPNOW time sync
-#define TS_REPORT_BIT      BIT0
-#define TS_FAILURE_BIT     BIT1
-#define TS_SYNC_PERIOD_MS  1000  
+#define TS_REPORT_BIT       BIT0
+#define TS_FAILURE_BIT      BIT1
+#define TS_SYNC_ON          8
+#define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
 static int64_t              s_time_offset_us = 0;
-static uint32_t             s_sync_count = 0;
+static int                  s_sync_count = 0;
+
+
+// FLASH Log
+#define SECTOR_SIZE                 4096UL
+#define STREAM_BUFFER_SIZE          (SECTOR_SIZE * 4)  // 16KB RAM buffer to absorb flash erase latency
+#define IMU_LOG_PARTITION_LABEL     "imu_log"
+#define IMU_SAMPLE_PERIOD_US        10000   /* 10 ms -> 100 Hz */
+#define FLASH_SECTOR_SIZE           4096u
+#define SECTOR_MAGIC                0x494D5546u   /* "IMUF" */
+
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;         /* SECTOR_MAGIC when this sector holds valid data */
+    uint32_t seq;           /* monotonically increasing write sequence number */
+    uint16_t sample_count;  /* number of valid imu_sample_t entries that follow */
+    uint16_t reserved;
+    uint32_t crc32;         /* CRC32 over the first sample_count samples       */
+} sector_header_t;
+
+_Static_assert(sizeof(sector_header_t) == 16, "header must be 16 bytes");
+
+#define SAMPLES_PER_SECTOR ((FLASH_SECTOR_SIZE - sizeof(sector_header_t)) / sizeof(imu_sample_t))
+
+/* A log_sector_t is exactly one flash sector. Sampling writes straight
+ * into buf.samples[]; at flush time we finish filling buf.header and
+ * push the *entire* 4096-byte struct to flash in a single
+ * esp_partition_write() call -- this is the "fastest api" write path:
+ * one erase_range() + one write() per sector, no partial writes, no
+ * filesystem bookkeeping layered on top. */
+typedef struct __attribute__((packed)) {
+    sector_header_t             header;                         // 16 byte header
+    imu_sample_t                samples[SAMPLES_PER_SECTOR];    // 21 bytes IMU flash
+    uint32_t                    padd;                           // 4 byte padding
+    uint16_t                    reserved;                       // 2 bytes reserved
+} log_sector_t;
+
+_Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE,  "log_sector_t must be exactly one flash sector");
+
+
+typedef struct {
+    uint32_t sectors_written;
+    uint32_t sectors_erase_failed;
+    uint32_t sectors_write_failed;
+    uint32_t buffer_overruns;     /* writer couldn't keep up in time     */
+    uint32_t next_sector;
+    uint32_t next_seq;
+    uint32_t total_sectors;
+    uint32_t wrap_count;          /* how many times the ring has wrapped */
+} imu_log_stats_t;
+
+
+
+
+/* Double buffer: while one is being filled by the timer callback, the
+ * other is either idle (already flushed) or being written by the
+ * writer task. Exactly one of {s_buf[0], s_buf[1]} is "active" at a
+ * time; the other is either empty or in flight to flash. */
+
+static portMUX_TYPE             s_mux = portMUX_INITIALIZER_UNLOCKED;
+static QueueHandle_t            s_flush_q;      /* holds indices (0/1) of full buffers */
+static TaskHandle_t             s_writer_task;
+static const esp_partition_t    *s_partition;
+static volatile uint8_t         s_active = 0;
+static log_sector_t             s_buf[2];
+
+static uint32_t                 s_total_sectors=0;
+static uint32_t                 s_next_sector;
+static uint32_t                 s_seq;
+static imu_log_stats_t          s_stats;
+static uint16_t                 ns=0;
+
+
+
 
 
 
@@ -131,7 +164,6 @@ esp_err_t init_espnow_timesync(void) ;
 
 /* GPTimer Init and ISR Callback  */
 static uint64_t ticks_to_next_boundary(uint64_t phase_now);
-static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata,  void *user_ctx);
 esp_err_t init_gptimer(uint64_t phase_now) ;
 esp_err_t gptimer_arm_next(uint64_t phase_now);
 static void timer_task(void *arg);
@@ -151,18 +183,6 @@ esp_err_t flash_log_stop(void) ;
 esp_err_t imu_flash_log_flush_partial(void);
 esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
 static void write_sector_to_flash(log_sector_t *sec);
-
-
-/* Flash functions */
-static inline bool seq_is_newer(uint32_t a, uint32_t b);
-void imu_flash_log_get_stats(imu_log_stats_t *out);
-esp_err_t init_flash(void);
-esp_err_t flash_log_start(void);
-esp_err_t flash_log_stop(void);
-esp_err_t imu_flash_log_flush_partial(void);
-esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
-static void write_sector_to_flash(log_sector_t *sec);
-static void flash_task(void *arg);
 
 
 /* BLE Commands */
