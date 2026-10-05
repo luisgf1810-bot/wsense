@@ -38,6 +38,124 @@ esp_err_t init_led(void) {
 }
 
 
+/* Initialize/Stop Wi-Fi & ESP-NOW TIME Sync */
+static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
+    switch (event_id) {
+        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED:      
+            espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
+            s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
+            s_sync_count+=1;
+            if (s_sync_count==TS_SYNC_ON) {
+                rcolor=0;
+                gcolor=7;
+            } 
+            if (!s_timer_started) {
+                /* First sync ever: bring the GPTimer up, phase-aligned to
+                * the master right from the very first tick. From here on,
+                * blink_task() re-arms every subsequent alarm itself using
+                * whatever offset is current, so no further action is
+                * needed here on later sync events - updating
+                * s_time_offset_us above is enough to discipline the next
+                * scheduled alarm. */
+                ESP_ERROR_CHECK(init_gptimer((uint64_t)get_synced_time_us()));
+                s_timer_started = true;
+            } else {
+                uint64_t now = (uint64_t)get_synced_time_us();
+                gptimer_arm_next(now);
+            }
+
+        break;
+
+
+        case ESP_EVENT_ESPNOW_TIMESYNC_TIMEOUT:
+            ESP_LOGW(TAG, "time sync request timed out, retrying");
+            espnow_time_responder_request();
+            break;
+
+        default:
+            break;
+    }
+}
+
+esp_err_t init_stack(void) {
+    
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(esp_netif_init());
+
+    return ESP_OK;
+}
+
+esp_err_t start_wifi(void) {
+
+    // start wifi
+    sta_netif = esp_netif_create_default_wifi_sta();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_start());
+    ESP_ERROR_CHECK( esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE));
+
+    ESP_LOGI(TAG, "WiFi initialized"); 
+
+    return ESP_OK;
+}
+
+esp_err_t stop_wifi(void) {
+
+    if (s_timesync_state==false) {
+
+        ESP_ERROR_CHECK(esp_wifi_disconnect());
+        ESP_ERROR_CHECK(esp_wifi_stop());
+        ESP_ERROR_CHECK(esp_wifi_deinit());
+
+        if (sta_netif != NULL) {
+            esp_netif_destroy_default_wifi(sta_netif);
+            sta_netif = NULL; 
+        }
+    }
+
+    ESP_LOGI(TAG, "WiFi stopped"); 
+
+    return ESP_OK;
+}
+
+esp_err_t start_espnow_timesync(void) {
+
+    // start espnow
+    espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
+    espnow_config.qsize = 32;
+    ESP_ERROR_CHECK( espnow_init(&espnow_config) );
+
+
+    // Responder
+    espnow_time_responder_config_t config = {
+        .max_drift_ms = 100,
+    };
+
+    ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ESPNOW,  ESP_EVENT_ANY_ID, &timesync_event_handler, NULL));
+    ESP_ERROR_CHECK(espnow_time_responder_start(&config));
+    ESP_ERROR_CHECK(espnow_time_responder_request());
+
+
+    ESP_LOGI(TAG, "ESPNOW TIMESYNC initialized"); 
+
+    return ESP_OK;
+}
+
+esp_err_t stop_espnow_timesync(void) {
+
+    ESP_ERROR_CHECK(espnow_time_responder_stop());
+    ESP_ERROR_CHECK(espnow_deinit());
+
+    ESP_LOGI(TAG, "ESPNOW TIMESYNC stopped"); 
+
+    return ESP_OK;
+}
+
+
+
 
 /* GPTimer Init and ISR Callback */
 int64_t get_synced_time_us(void)
@@ -271,8 +389,6 @@ esp_err_t init_imu() {
     ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
     bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
     
-    
-
     return ESP_OK;
 }
 
@@ -441,82 +557,8 @@ static void flash_task(void *arg)
 
 
 
-/* Initialize Wi-Fi & ESP-NOW Managed Sync */
-static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
-    switch (event_id) {
-        case ESP_EVENT_ESPNOW_TIMESYNC_SYNCED:      
-            espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
-            s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-            s_sync_count+=1;
-            if (s_sync_count==TS_SYNC_ON) {
-                rcolor=0;
-                gcolor=7;
-            } 
-            if (!s_timer_started) {
-                /* First sync ever: bring the GPTimer up, phase-aligned to
-                * the master right from the very first tick. From here on,
-                * blink_task() re-arms every subsequent alarm itself using
-                * whatever offset is current, so no further action is
-                * needed here on later sync events - updating
-                * s_time_offset_us above is enough to discipline the next
-                * scheduled alarm. */
-                ESP_ERROR_CHECK(init_gptimer((uint64_t)get_synced_time_us()));
-                s_timer_started = true;
-            } else {
-                uint64_t now = (uint64_t)get_synced_time_us();
-                gptimer_arm_next(now);
-            }
-
-        break;
-
-
-        case ESP_EVENT_ESPNOW_TIMESYNC_TIMEOUT:
-            ESP_LOGW(TAG, "time sync request timed out, retrying");
-            espnow_time_responder_request();
-            break;
-
-        default:
-            break;
-    }
-}
-
-esp_err_t init_espnow_timesync(void) {
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    espnow_config_t espnow_cfg = ESPNOW_INIT_CONFIG_DEFAULT();
-    espnow_cfg.qsize = 32;
-    ESP_ERROR_CHECK(espnow_init(&espnow_cfg));
-
-    // Responder
-    espnow_time_responder_config_t config = {
-        .max_drift_ms = 100,
-    };
-
-    ESP_ERROR_CHECK(esp_event_handler_register(ESP_EVENT_ESPNOW,  ESP_EVENT_ANY_ID, &timesync_event_handler, NULL));
-    ESP_ERROR_CHECK(espnow_time_responder_start(&config));
-    ESP_ERROR_CHECK(espnow_time_responder_request());
-
-    ESP_LOGI(TAG, "ESPNOW initialized"); 
-    
-    return ESP_OK;
-}
-
-
-
 /* BLE Commands */
 void start_imulogs() {
-    // stop timesync
-    espnow_time_initiator_stop();
 
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
@@ -532,15 +574,19 @@ void start_imulogs() {
 
     // start imu logging
     gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
+
+    // stop timesync espnow
+    ESP_ERROR_CHECK(stop_espnow_timesync());
     s_timesync_state=false;
 
-    ti=get_synced_time_us();
+    // stop wifi
+    ESP_ERROR_CHECK(stop_wifi());
+
+    ti=esp_timer_get_time();
     te=rate=0;
 }   
 
 void stop_imulogs() {
-
-    s_timesync_state=true;
 
     // disable IMU
     if (IMU_ENABLE_LA) {
@@ -556,12 +602,16 @@ void stop_imulogs() {
     ESP_ERROR_CHECK(flash_log_stop());
 
 
+    // start wifi
+    ESP_ERROR_CHECK(start_wifi());
+
+    // start espnow timesync
+    s_timesync_state=true;
+    ESP_ERROR_CHECK(start_espnow_timesync());
+
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
 }
-
-
-
 
 
 
@@ -598,9 +648,11 @@ void app_main()
     // SetUp
     ESP_ERROR_CHECK(init_battery());
     ESP_ERROR_CHECK(init_led());
+    ESP_ERROR_CHECK(init_stack());
+    ESP_ERROR_CHECK(start_wifi());
+    ESP_ERROR_CHECK(start_espnow_timesync());
     ESP_ERROR_CHECK(init_imu());
     ESP_ERROR_CHECK(init_flash());
-    ESP_ERROR_CHECK(init_espnow_timesync());
     ESP_ERROR_CHECK(init_ble());
 
     ESP_LOGI(TAG, "Slave ready - waiting for the first ESP-NOW time sync...");

@@ -43,13 +43,10 @@
 static const char *TAG = "MAIN";
 
 
-
-
 // TIMER
 #define GPTIMER_RESOLUTION_HZ   (1000000ULL) // 1 MHz (1 tick = 1 us)
 #define TIMESYNC_BLINK_HZ       (4000000ULL)
 
-static bool                     s_timesync_state    = true;
 static TaskHandle_t             s_gptimer_task      = NULL;
 static gptimer_handle_t         s_gptimer           = NULL;
 static QueueHandle_t            s_gptimer_evt_q     = NULL;
@@ -69,6 +66,8 @@ static led_strip_handle_t   s_led_strip    = NULL;
 static uint                 gcolor=0;
 static uint                 rcolor=7;
 
+
+
 // ESPNOW time sync
 #define TS_REPORT_BIT       BIT0
 #define TS_FAILURE_BIT      BIT1
@@ -77,6 +76,10 @@ static uint                 rcolor=7;
 
 static int64_t              s_time_offset_us = 0;
 static int                  s_sync_count = 0;
+static bool                 s_timesync_state    = true;
+esp_netif_t                 *sta_netif = NULL;
+
+
 
 
 // FLASH Log
@@ -160,9 +163,15 @@ esp_err_t init_battery() ;
 esp_err_t init_led(void) ;
 
 /* Initialize Wi-Fi & ESP-NOW TIME Sync */
-esp_err_t init_espnow_timesync(void) ;
+esp_err_t init_stack(void);
+esp_err_t start_wifi(void);
+esp_err_t stop_wifi(void) ;
+esp_err_t start_espnow_timesync(void);
+esp_err_t stop_espnow_timesync(void) ;
+
 
 /* GPTimer Init and ISR Callback  */
+int64_t get_synced_time_us(void);
 static uint64_t ticks_to_next_boundary(uint64_t phase_now);
 esp_err_t init_gptimer(uint64_t phase_now) ;
 esp_err_t gptimer_arm_next(uint64_t phase_now);
