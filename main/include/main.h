@@ -69,16 +69,15 @@ static uint                 rcolor=7;
 
 
 // ESPNOW time sync
-#define TS_REPORT_BIT       BIT0
-#define TS_FAILURE_BIT      BIT1
-#define TS_SYNC_ON          8
+#define TS_REPORT_BIT           BIT0
+#define TS_FAILURE_BIT          BIT1
+#define TS_SYNC_ON              8
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
 static int64_t              s_time_offset_us = 0;
 static int                  s_sync_count = 0;
-static bool                 s_timesync_state    = true;
+static bool                 s_timesync_state = true;
 esp_netif_t                 *sta_netif = NULL;
-
 
 
 
