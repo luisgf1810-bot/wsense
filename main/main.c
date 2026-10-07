@@ -37,6 +37,21 @@ esp_err_t init_led(void) {
     return ESP_OK;
 }
 
+void tilt_led() {
+
+    led_strip_set_pixel(s_led_strip, 0, 7, 0, 0); 
+    led_strip_refresh(s_led_strip);
+    vTaskDelay(150);
+    led_strip_set_pixel(s_led_strip, 0, 0, 7, 0); 
+    led_strip_refresh(s_led_strip);
+    vTaskDelay(150);
+    led_strip_set_pixel(s_led_strip, 0, 0, 0, 7); 
+    led_strip_refresh(s_led_strip);
+    vTaskDelay(150);
+    led_strip_clear(s_led_strip);
+}
+
+
 
 /* Initialize/Stop Wi-Fi & ESP-NOW TIME Sync */
 static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -560,6 +575,11 @@ static void flash_task(void *arg)
 /* BLE Commands */
 void start_imulogs() {
 
+    tilt_led();
+    tilt_led();
+    tilt_led();
+
+
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
 
@@ -588,6 +608,10 @@ void start_imulogs() {
 
 void stop_imulogs() {
 
+    tilt_led();
+    tilt_led();
+    tilt_led();
+    
     // disable IMU
     if (IMU_ENABLE_LA) {
         bno085_disable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION);
@@ -607,6 +631,9 @@ void stop_imulogs() {
 
     // start espnow timesync
     s_timesync_state=true;
+    rcolor=7;
+    gcolor=0;
+    s_sync_count=0;
     ESP_ERROR_CHECK(start_espnow_timesync());
 
     // start led blinking
