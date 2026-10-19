@@ -273,6 +273,58 @@ esp_err_t init_stack(void) {
     return ESP_OK;
 }
 
+static esp_err_t wifi_enable_ap(void)
+{
+    if (ap_netif != NULL) {
+        return ESP_OK;                       /* already up */
+    }
+
+    ap_netif = esp_netif_create_default_wifi_ap();
+    if (ap_netif == NULL) {
+        return ESP_FAIL;
+    }
+
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid           = WIFI_AP_SSID,
+            .ssid_len       = strlen(WIFI_AP_SSID),
+            .channel        = WIFI_AP_CHANNEL,
+            .password       = WIFI_AP_PASS,
+            .max_connection = WIFI_AP_MAX_CONN,
+            .authmode       = WIFI_AUTH_WPA2_PSK,
+            .pmf_cfg        = { .required = false },
+        },
+    };
+
+    /* APSTA keeps the STA interface alive, so ESP-NOW time sync keeps running */
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    if (err == ESP_OK) err = esp_wifi_set_channel(WIFI_AP_CHANNEL, WIFI_SECOND_CHAN_NONE);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "enable AP failed: %s", esp_err_to_name(err));
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_netif_destroy_default_wifi(ap_netif);
+        ap_netif = NULL;
+        return err;
+    }
+
+    ESP_LOGI(TAG, "AP enabled: \"%s\" ch %d", WIFI_AP_SSID, WIFI_AP_CHANNEL);
+    return ESP_OK;
+}
+
+static void wifi_disable_ap(void)
+{
+    if (ap_netif == NULL) {
+        return;                              /* nothing to do (also when Wi-Fi is already off) */
+    }
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_netif_destroy_default_wifi(ap_netif);
+    ap_netif = NULL;
+    ESP_LOGI(TAG, "AP disabled, back to STA");
+}
+
+
 esp_err_t start_wifi(void) {
 
     // start wifi
@@ -443,7 +495,7 @@ static void timer_task(void *arg)
 
             if (s_timesync_state) {
                 uint64_t tick = now / gptimer_period;
-                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us", tick, now);
+                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us, battery_state = %u", tick, now, get_battery_state());
             }
 
             /* Re-arm the next one-shot alarm right away - the timer
@@ -475,13 +527,7 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.game_rotation.j      = value->data.game_rotation_vector.j;
             sample.game_rotation.k      = value->data.game_rotation_vector.k;
             sample.game_rotation.real   = value->data.game_rotation_vector.real;
-            /*printf("(%.4f)%.4f,%.4f,%.4f,%.4f\n",
-                    1000000/((te-ti)/rate),
-                    value->data.game_rotation_vector.i, 
-                    value->data.game_rotation_vector.j,
-                    value->data.game_rotation_vector.k,
-                    value->data.game_rotation_vector.real
-                    );*/
+
             break;
         case BNO085_SENSOR_LINEAR_ACCELERATION:
             te=get_synced_time_us();        
@@ -490,12 +536,6 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.linear_accel.x       = value->data.linear_acceleration.x;
             sample.linear_accel.y       = value->data.linear_acceleration.y;
             sample.linear_accel.z       = value->data.linear_acceleration.z;
-            /*printf("(%.4f)%.4f,%.4f,%.4f\n",
-                    1000000/((te-ti)/rate),
-                    value->data.linear_acceleration.x, 
-                    value->data.linear_acceleration.y,
-                    value-80>data.linear_acceleration.z
-                    );*/
             break;
 
         default:
@@ -503,10 +543,6 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
                
     }
 
-    /*if ((rate % 194)==0) {
-        ns+=1;
-        printf("%.4f - %d\n",  (double)1000000/((te-ti)/rate), ns);
-    }*/
 
     taskENTER_CRITICAL(&s_mux);
     uint8_t idx = s_active;
@@ -745,6 +781,135 @@ static void flash_task(void *arg)
 
 
 
+/* WebServer */
+
+static esp_err_t imu_bin_get_handler(httpd_req_t *req)
+{
+    if (!s_timesync_state) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "logging in progress");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "-------> HTTP Req %d", req->uri);
+
+    /* Default: only the sectors written in the last run.
+     * GET /imu.bin?full=1 -> the whole partition. */
+    imu_log_stats_t stats;
+    imu_flash_log_get_stats(&stats);
+    uint32_t sectors = stats.next_sector;
+
+    char query[32], val[4];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "full", val, sizeof(val)) == ESP_OK &&
+        val[0] == '1') {
+        sectors = (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE);
+    }
+
+    if (sectors == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no data (try ?full=1)");
+        return ESP_OK;
+    }
+
+    uint8_t *buf = malloc(FLASH_SECTOR_SIZE);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+        return ESP_OK;
+    }
+
+    char total[16];
+    snprintf(total, sizeof(total), "%" PRIu32, sectors * FLASH_SECTOR_SIZE);
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"imu_log.bin\"");
+    httpd_resp_set_hdr(req, "X-Total-Size", total);   /* chunked, so no Content-Length */
+
+    for (uint32_t i = 0; i < sectors; i++) {
+        if (!s_timesync_state) {            /* logging restarted -> abort */
+            ESP_LOGW(TAG, "download aborted: logging started");
+            free(buf);
+            return ESP_FAIL;                /* closes the socket, client sees an incomplete transfer */
+        }
+        if (esp_partition_read(s_partition, (size_t)i * FLASH_SECTOR_SIZE, buf, FLASH_SECTOR_SIZE) != ESP_OK) {
+            ESP_LOGE(TAG, "flash read failed @ sector %" PRIu32, i);
+            free(buf);
+            return ESP_FAIL;
+        }
+        if (httpd_resp_send_chunk(req, (const char *)buf, FLASH_SECTOR_SIZE) != ESP_OK) {
+            ESP_LOGW(TAG, "client closed connection @ sector %" PRIu32, i);
+            free(buf);
+            return ESP_FAIL;
+        }
+    }
+
+    free(buf);
+    httpd_resp_send_chunk(req, NULL, 0);    /* end of chunked response */
+    ESP_LOGI(TAG, "download complete: %" PRIu32 " sectors", sectors);
+    return ESP_OK;
+}
+
+uint8_t ble_status_flags(void)
+{
+    return (s_timesync_state ? 0x00 : 0x01) | (s_httpd ? 0x02 : 0x00);
+}
+
+esp_err_t start_webserver(void)
+{    
+    if (!s_timesync_state) {
+        ESP_LOGW(TAG, "HTTP server refused: logging active, Wi-Fi is off");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_httpd != NULL) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = wifi_enable_ap();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.stack_size        = 6144;
+    config.send_wait_timeout = 10;     /* don't hang forever on a stalled client */
+    config.lru_purge_enable  = true;
+
+    err = httpd_start(&s_httpd, &config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        s_httpd = NULL;
+        return err;
+    }
+
+    httpd_uri_t imu_uri = {
+        .uri     = "/imu.bin",
+        .method  = HTTP_GET,
+        .handler = imu_bin_get_handler,
+        .user_ctx = NULL,
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(s_httpd, &imu_uri));
+
+    ESP_LOGI(TAG, "HTTP server started: GET http://192.168.4.1/imu.bin");
+
+    return ESP_OK;
+}
+
+esp_err_t stop_webserver(void)
+{
+    if (s_httpd != NULL) {
+        httpd_stop(s_httpd);
+        s_httpd = NULL;
+        ESP_LOGI(TAG, "HTTP server stopped");
+    }
+    wifi_disable_ap();
+    return ESP_OK;
+}
+
+
+
+
+
+
+
 /* BLE Commands */
 void start_imulogs() {
 
@@ -771,6 +936,10 @@ void start_imulogs() {
     // stop timesync espnow
     ESP_ERROR_CHECK(stop_espnow_timesync());
     s_timesync_state=false;
+
+    // stop webserver
+    stop_webserver();
+
 
     // stop wifi
     ESP_ERROR_CHECK(stop_wifi());

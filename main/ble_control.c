@@ -58,6 +58,16 @@ static int gatt_access_cmd(uint16_t conn_handle, uint16_t attr_handle,
         case IMU_BLE_CMD_STOP:
             do_stop();
             break;
+        case IMU_BLE_CMD_HTTP_START:
+            if (start_webserver() != ESP_OK) {
+                return BLE_ATT_ERR_UNLIKELY;   /* e.g. logging active -> refused */
+            }
+            notify_status();
+            break;
+        case IMU_BLE_CMD_HTTP_STOP:
+            stop_webserver();
+            notify_status();
+            break;
         default:
             ESP_LOGW(BLETAG, "unknown command byte 0x%02x", data[0]);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;

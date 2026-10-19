@@ -26,6 +26,7 @@
 
 #include "esp_event.h"
 #include "esp_mac.h"
+#include "esp_now.h"
 #include "esp_crc.h"
 #include "esp_sleep.h"
 #include "esp_adc/adc_oneshot.h"
@@ -81,7 +82,6 @@ static uint64_t                 gptimer_period      = TIMESYNC_BLINK_HZ;
 static volatile bool            s_timer_started     = false;
 
 
-
 // LED
 #define LED_SLP_PIN   20
 #define LED_PIN   19                
@@ -91,6 +91,18 @@ static volatile bool            s_timer_started     = false;
 static led_strip_handle_t   s_led_strip    = NULL;
 static uint                 gcolor=0;
 static uint                 rcolor=7;
+
+
+// WiFI
+
+esp_netif_t *sta_netif = NULL;
+esp_netif_t *ap_netif  = NULL;
+
+#define WIFI_AP_SSID       "SLAVE1-AP"
+#define WIFI_AP_PASS       "12345678"   /* >= 8 chars for WPA2 */
+#define WIFI_AP_CHANNEL    1            /* keep equal to the ESP-NOW channel */
+#define WIFI_AP_MAX_CONN   4
+
 
 
 
@@ -103,7 +115,6 @@ static uint                 rcolor=7;
 static int64_t              s_time_offset_us = 0;
 static int                  s_sync_count = 0;
 static bool                 s_timesync_state = true;
-esp_netif_t                 *sta_netif = NULL;
 
 
 
@@ -178,6 +189,8 @@ static uint16_t                 ns=0;
 
 
 
+// HTTP Server
+static httpd_handle_t s_httpd = NULL;
 
 
 
@@ -188,26 +201,7 @@ uint16_t BatteryVoltageRead();
 int get_battery_state(void);
 uint8_t BatteryLevelRead();
 
-/* Initi// BATTERY
-#define POWER_BAT_RUN 0U
-#define POWER_USB 1U
-#define POWER_INIT 2U
-#define POWER_BAT_LOW 3U
-#define POWER_BAT_FULL 4U
-#define POWER_BAT_CHRG 5U
-#define USB_VOLTAGE 4220
-#define MIN_BATTERY_VOLTAGE 3350
-#define AVRG_FILTER_SIZE 8U
-
-
-static adc_oneshot_unit_handle_t adc1_handle;
-static adc_cali_handle_t adc1_cali_handle;
-static uint16_t _voltage_last = 0xFFU;
-static uint16_t _voltage_avrg[AVRG_FILTER_SIZE] = { 0 };
-uint8_t _voltage_index = 0;
-uint8_t _charge_state = POWER_INIT;
-uint8_t _chrg_counter = 0U;
-uint8_t _lowvoltage_counter = 0;alize led strip */
+/* Init LED */
 esp_err_t init_led(void) ;
 void tilt_led(void) ;
 
@@ -241,6 +235,15 @@ esp_err_t flash_log_stop(void) ;
 esp_err_t imu_flash_log_flush_partial(void);
 esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
 static void write_sector_to_flash(log_sector_t *sec);
+
+
+
+/* HTTP download server */
+esp_err_t start_webserver(void);
+esp_err_t stop_webserver(void);
+static esp_err_t imu_bin_get_handler(httpd_req_t *req);
+uint8_t   ble_status_flags(void);
+
 
 
 /* BLE Commands */

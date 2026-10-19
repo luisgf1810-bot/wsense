@@ -88,6 +88,9 @@ void ble_store_config_init(void);
 
 void start_imulogs();
 void stop_imulogs();
+esp_err_t stop_webserver(void);
+esp_err_t start_webserver(void);
+uint8_t   ble_status_flags(void);
 
 #ifdef __cplusplus
 }
