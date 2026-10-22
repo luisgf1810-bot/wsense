@@ -22,7 +22,6 @@
 
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_http_server.h"
 
 #include "esp_event.h"
 #include "esp_mac.h"
@@ -96,14 +95,6 @@ static uint                 rcolor=7;
 // WiFI
 
 esp_netif_t *sta_netif = NULL;
-esp_netif_t *ap_netif  = NULL;
-
-#define WIFI_AP_SSID       "LEFTLEG-AP"
-#define WIFI_AP_PASS       ""   /* >= 8 chars for WPA2 */
-#define WIFI_AP_CHANNEL    1            /* keep equal to the ESP-NOW channel */
-#define WIFI_AP_MAX_CONN   4
-
-
 
 
 // ESPNOW time sync
@@ -187,10 +178,10 @@ static uint32_t                 s_seq;
 static imu_log_stats_t          s_stats;
 static uint16_t                 ns=0;
 static volatile bool            s_log_full          = false;
+static volatile bool            s_sampling      = false;  /* gate: on_sensor_data stores samples only while true */
+static volatile bool            s_stop_busy     = false;  /* stop_imulogs() already running */
 
 
-// HTTP Server
-static httpd_handle_t s_httpd = NULL;
 
 
 
@@ -238,12 +229,20 @@ static void write_sector_to_flash(log_sector_t *sec);
 
 
 
-/* HTTP download server */
-esp_err_t start_webserver(void);
-esp_err_t stop_webserver(void);
-static esp_err_t imu_bin_get_handler(httpd_req_t *req);
-uint8_t   ble_status_flags(void);
+// BLE download
+static TaskHandle_t     s_dl_task        = NULL;
+static volatile bool    s_dl_active      = false;
+static volatile bool    s_dl_abort       = false;
+static volatile uint8_t s_dl_reason      = 0;
+static uint32_t         s_dl_start_sector = 0;
+static uint32_t         s_dl_sectors      = 0;
 
+esp_err_t imu_download_start(bool full, uint32_t start_sector);
+void      imu_download_stop(uint8_t reason);
+static void dl_task(void *arg);
+uint8_t   ble_status_flags(void);
+static void radio_pause(void);
+static void radio_resume(void);  
 
 
 /* BLE Commands */
