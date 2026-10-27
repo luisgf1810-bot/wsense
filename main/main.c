@@ -484,6 +484,9 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.linear_accel.x       = value->data.linear_acceleration.x;
             sample.linear_accel.y       = value->data.linear_acceleration.y;
             sample.linear_accel.z       = value->data.linear_acceleration.z;
+
+            //if (rate>30) printf("%ld,%ld\n",rate ,sample.timestamp_ms); 
+
             break;
 
         default:
@@ -493,7 +496,8 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
 
 
     taskENTER_CRITICAL(&s_mux);
-    if (!s_sampling) {                 /* logging closed -> drop late reports */
+
+    if (!s_sampling || rate<30) {                 /* logging closed -> drop late reports */
         taskEXIT_CRITICAL(&s_mux);
         return;
     }
@@ -717,12 +721,12 @@ static void write_sector_to_flash(log_sector_t *sec)
     }
 
     s_stats.sectors_written++;
-    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
+    /*ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
               s_next_sector, 
               sec->header.seq, 
               sec->header.sample_count,
               (long long)(get_synced_time_us() - t0)
-    );
+    );*/
 
 advance:
     s_next_sector++;
@@ -769,7 +773,11 @@ esp_err_t imu_download_start(bool full, uint32_t start_sector)
     imu_flash_log_get_stats(&stats);
     uint32_t total = full ? (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE) : stats.next_sector;
 
+    ESP_LOGI(TAG, "Starting download full=%d on init sector %" PRIu32, full, start_sector);
+
     if (total == 0 || start_sector >= total) {
+         ESP_LOGW(TAG, "download refused: invalid sector range %" PRIu32 "..%" PRIu32,
+                 start_sector, total - 1);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -779,6 +787,7 @@ esp_err_t imu_download_start(bool full, uint32_t start_sector)
     s_dl_reason       = 0;
     s_dl_active       = true;
     xTaskNotifyGive(s_dl_task);
+
     return ESP_OK;
 }
 
