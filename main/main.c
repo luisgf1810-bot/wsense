@@ -497,7 +497,7 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
 
     taskENTER_CRITICAL(&s_mux);
 
-    if (!s_sampling || rate<30) {                 /* logging closed -> drop late reports */
+    if (!s_sampling) {                 /* logging closed -> drop late reports */
         taskEXIT_CRITICAL(&s_mux);
         return;
     }
@@ -721,12 +721,12 @@ static void write_sector_to_flash(log_sector_t *sec)
     }
 
     s_stats.sectors_written++;
-    /*ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
+    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
               s_next_sector, 
               sec->header.seq, 
               sec->header.sample_count,
               (long long)(get_synced_time_us() - t0)
-    );*/
+    );
 
 advance:
     s_next_sector++;
@@ -960,7 +960,8 @@ void stop_imulogs() {
     if (skip) {
         return;
     }
-    
+
+    ESP_LOGI(TAG, "Stopping IMU logging");
     
     // disable IMU
     if (IMU_ENABLE_LA) {
