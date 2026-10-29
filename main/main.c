@@ -497,7 +497,7 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
 
     taskENTER_CRITICAL(&s_mux);
 
-    if (!s_sampling) {                 /* logging closed -> drop late reports */
+    if (!s_sampling || rate<30) {                 /* logging closed -> drop late reports */
         taskEXIT_CRITICAL(&s_mux);
         return;
     }
@@ -893,6 +893,9 @@ static void radio_resume(void)
 }
 
 
+
+
+
 /* BLE Commands */
 
 uint8_t ble_status_flags(void)
@@ -1006,6 +1009,11 @@ void stop_imulogs() {
 
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
+
+
+    taskENTER_CRITICAL(&s_mux);
+    s_stop_busy = false;
+    taskEXIT_CRITICAL(&s_mux);
 }
 
 
